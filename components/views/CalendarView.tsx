@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { ChevronLeft, ChevronRight, GripVertical } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, GripVertical } from "lucide-react";
 import type { Task } from "@/lib/types";
 import { formatDuration, formatTime, localDateOnly } from "@/lib/format";
 import { updateTask } from "@/lib/task-service";
@@ -269,8 +269,8 @@ function CalendarTaskBlock({ task, selectedDate, onSelect, isOverDayTasks, onDay
       title="Drag vertically to reschedule, or drag into Day Tasks to unschedule"
     >
       <button className="calendar-resize-handle top" aria-label={`Adjust start time for ${task.title}`} onPointerDown={event => startInteraction("resize-top", event)} />
-      <strong>{task.status === "done" ? "✓ " : ""}{task.title}</strong>
-      <span>{formatTime(minutesToTime(previewStart))} – {formatTime(minutesToTime(previewEnd))} · {formatDuration(previewDuration)}</span>
+      <strong>{task.status === "done" ? "✓ " : ""}{task.title}{task.estimatedMinutes == null && <span className="calendar-duration-warning" title="No duration set — calendar is using the default display length."><AlertTriangle size={13}/><span className="sr-only">No duration set — calendar is using the default display length.</span></span>}</strong>
+      <span>{formatTime(minutesToTime(previewStart))} – {formatTime(minutesToTime(previewEnd))} · {formatDuration(previewDuration)}{task.estimatedMinutes == null ? " · default display length" : ""}</span>
       <button className="calendar-resize-handle bottom" aria-label={`Adjust end time for ${task.title}`} onPointerDown={event => startInteraction("resize-bottom", event)} />
     </div>
   );

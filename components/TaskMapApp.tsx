@@ -18,6 +18,7 @@ import {
   Map as MapIcon,
   Plus,
   Search,
+  Settings as SettingsIcon,
   Sparkles,
   Sun,
   Wifi,
@@ -37,6 +38,7 @@ import {
   useTaskTemplate,
   toggleTaskComplete,
   updateTask,
+  changeTaskProject,
 } from "@/lib/task-service";
 import { taskMatchesRule, validateRule } from "@/lib/rule-service";
 import type { AssistantAction, Project, RecurrenceRule, Task, TaskCategory, TaskSortMode, TodayFilter } from "@/lib/types";
@@ -47,7 +49,8 @@ import HistoryPanel from "./views/HistoryPanel";
 import OfflineBootstrap from "./OfflineBootstrap";
 import AssistantPanel from "./AssistantPanel";
 import TemplatesView from "./TemplatesView";
-import { defaultRecurrenceRule, recurrenceLabel } from "@/lib/recurrence";
+import { defaultRecurrenceRule, nextOccurrence, recurrenceLabel } from "@/lib/recurrence";
+import { APP_VERSION } from "@/lib/app-meta";
 
 const nav = [
   ["home", "Home", Home],
@@ -60,9 +63,10 @@ const nav = [
   ["templates", "Templates", FileStack],
 ] as const;
 
-type View = (typeof nav)[number][0];
+type View = (typeof nav)[number][0] | "settings";
 type DropMode = "before" | "after" | "nest";
 type HierarchyEntry = { task: Task; depth: number };
+type RecurringTransition = { seriesId: string; completedTaskId: string; nextOccurrenceNumber: number; completedUntil: number; protectUntil: number; badgeUntil: number; nextLabel: string };
 
 const priorityRank: Record<Task["priority"], number> = { urgent: 0, high: 1, normal: 2, low: 3 };
 
@@ -148,6 +152,8 @@ export default function TaskMapApp() {
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [deleteRequest, setDeleteRequest] = useState<{ ids: string[]; source: "single" | "bulk" } | null>(null);
+  const [projectChangeRequest, setProjectChangeRequest] = useState<{ taskId: string; projectId: string | null } | null>(null);
+  const [recurringTransitions, setRecurringTransitions] = useState<Record<string, RecurringTransition>>({});
 
   const tasks = useLiveQuery(() => db.tasks.filter(task => !task.deletedAt).toArray(), [], []);
   const projects = useLiveQuery(() => db.projects.orderBy("name").toArray(), [], []);
@@ -177,6 +183,9 @@ export default function TaskMapApp() {
   }, []);
 
   const selected = tasks.find(task => task.id === selectedId) ?? null;
+  const renderNow = Date.now();
+  const activeRecurringTransitions = Object.values(recurringTransitions).filter(transition => transition.badgeUntil > renderNow);
+  const lingeringRecurringTaskIds = new Set(activeRecurringTransitions.filter(transition => transition.completedUntil > renderNow).map(transition => transition.completedTaskId));
   const today = localDateOnly();
   const projectScoped = selectedProjectId ? tasks.filter(task => task.projectId === selectedProjectId) : tasks;
   const focusedParent = focusedParentId ? tasks.find(task => task.id === focusedParentId) ?? null : null;
@@ -186,7 +195,7 @@ export default function TaskMapApp() {
   const baseScope = tagScoped ?? (parentScopeIds ? tasks.filter(task => parentScopeIds.has(task.id)) : projectScoped);
 
   const todayTasks = projectScoped.filter(task => task.dueDate === today || task.startDate === today || task.priority === "urgent");
-  const todayVisibleByCompleted = showCompleted ? todayTasks : todayTasks.filter(task => task.status !== "done");
+  const todayVisibleByCompleted = showCompleted ? todayTasks : todayTasks.filter(task => task.status !== "done" || lingeringRecurringTaskIds.has(task.id));
   const filteredToday = todayVisibleByCompleted.filter(task => {
     if (todayFilter === "scheduled") return Boolean(task.startTime);
     if (todayFilter === "unscheduled") return !task.startTime;
@@ -198,8 +207,8 @@ export default function TaskMapApp() {
   if (view === "today") baseVisibleTasks = filteredToday;
   if (view === "inbox") baseVisibleTasks = tasks.filter(task => !task.projectId);
   if (view === "completed") baseVisibleTasks = baseScope.filter(task => task.status === "done");
-  if (view !== "completed") baseVisibleTasks = baseVisibleTasks.filter(task => !(task.status === "done" && task.recurrence?.enabled));
-  if (view !== "today" && view !== "completed" && !showCompleted) baseVisibleTasks = baseVisibleTasks.filter(task => task.status !== "done");
+  if (view !== "completed") baseVisibleTasks = baseVisibleTasks.filter(task => !(task.status === "done" && task.recurrence?.enabled) || lingeringRecurringTaskIds.has(task.id));
+  if (view !== "today" && view !== "completed" && !showCompleted) baseVisibleTasks = baseVisibleTasks.filter(task => task.status !== "done" || lingeringRecurringTaskIds.has(task.id));
 
   const normalizedSearch = searchQuery.trim().toLowerCase();
   if (normalizedSearch && view !== "map" && view !== "calendar") {
@@ -335,6 +344,16 @@ export default function TaskMapApp() {
     }
   }
 
+  async function requestProjectChange(taskId: string, projectId: string | null) {
+    const task = tasks.find(candidate => candidate.id === taskId);
+    if (!task || task.projectId === projectId) return;
+    if (descendantIds(tasks, task.id).size > 0) {
+      setProjectChangeRequest({ taskId, projectId });
+      return;
+    }
+    await changeTaskProject(task.id, projectId, false);
+  }
+
   async function dropTaskOnProject(projectId: string, event: DragEvent<HTMLButtonElement>) {
     event.preventDefault();
     const taskId = event.dataTransfer.getData("application/taskmap-task") || draggingId;
@@ -342,7 +361,7 @@ export default function TaskMapApp() {
     setProjectDropId(null);
     setDraggingId(null);
     if (!task || task.projectId === projectId) return;
-    await updateTask(task.id, { projectId }, "TASK_PROJECT_DROPPED");
+    await requestProjectChange(task.id, projectId);
   }
 
   function findTaskByTitle(title: string) {
@@ -402,6 +421,56 @@ export default function TaskMapApp() {
     }
   }
 
+  function formatTransitionOccurrence(task: Task) {
+    const next = nextOccurrence(task);
+    if (!next) return "Series complete";
+    const date = new Date(`${next.date}T12:00:00`);
+    const dateLabel = date.toLocaleDateString([], { month: "short", day: "numeric" });
+    return next.time ? `${dateLabel} at ${formatTime(next.time)}` : dateLabel;
+  }
+
+  async function handleToggleTask(task: Task) {
+    if (task.status === "done" || !task.recurrence?.enabled) {
+      await toggleTaskComplete(task);
+      return;
+    }
+
+    const seriesId = task.recurrenceSeriesId ?? task.id;
+    const nowMs = Date.now();
+    const transition: RecurringTransition = {
+      seriesId,
+      completedTaskId: task.id,
+      nextOccurrenceNumber: (task.recurrenceOccurrence ?? 1) + 1,
+      completedUntil: nowMs + 1000,
+      protectUntil: nowMs + 1800,
+      badgeUntil: nowMs + 4500,
+      nextLabel: formatTransitionOccurrence(task),
+    };
+    setRecurringTransitions(current => ({ ...current, [seriesId]: transition }));
+
+    const refresh = () => setRecurringTransitions(current => ({ ...current }));
+    window.setTimeout(refresh, 1030);
+    window.setTimeout(refresh, 1830);
+    window.setTimeout(() => setRecurringTransitions(current => {
+      const active = current[seriesId];
+      if (!active || active.completedTaskId !== task.id) return current;
+      const next = { ...current };
+      delete next[seriesId];
+      return next;
+    }), 4550);
+
+    try {
+      await toggleTaskComplete(task);
+    } catch (error) {
+      setRecurringTransitions(current => {
+        const next = { ...current };
+        delete next[seriesId];
+        return next;
+      });
+      throw error;
+    }
+  }
+
   function requestDelete(ids: string[], source: "single" | "bulk" = "single") {
     const unique = [...new Set(ids)].filter(id => tasks.some(task => task.id === id));
     if (!unique.length) return;
@@ -410,6 +479,31 @@ export default function TaskMapApp() {
 
   function toggleBulkSelection(id: string) {
     setBulkSelected(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  }
+
+  function toggleSelectAllVisible() {
+    const visibleIds = visibleTasks.map(task => task.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every(id => bulkSelected.has(id));
+    setBulkSelected(current => {
+      const next = new Set(current);
+      if (allSelected) visibleIds.forEach(id => next.delete(id));
+      else visibleIds.forEach(id => next.add(id));
+      return next;
+    });
+  }
+
+  function recurringUiForTask(task: Task) {
+    const seriesId = task.recurrenceSeriesId ?? (task.recurrence?.enabled ? task.id : null);
+    if (!seriesId) return { state: null as "completed" | "next" | null, protected: false, nextLabel: "" };
+    const transition = recurringTransitions[seriesId];
+    if (!transition || transition.badgeUntil <= renderNow) return { state: null as "completed" | "next" | null, protected: false, nextLabel: "" };
+    if (task.id === transition.completedTaskId && transition.completedUntil > renderNow) {
+      return { state: "completed" as const, protected: true, nextLabel: transition.nextLabel };
+    }
+    if ((task.recurrenceOccurrence ?? 0) === transition.nextOccurrenceNumber) {
+      return { state: "next" as const, protected: transition.protectUntil > renderNow, nextLabel: transition.nextLabel };
+    }
+    return { state: null as "completed" | "next" | null, protected: false, nextLabel: "" };
   }
 
   function handleTemplateUsed(rootTaskId: string) {
@@ -441,6 +535,25 @@ export default function TaskMapApp() {
         : selectedTagFilter
           ? `${visibleTasks.length} task${visibleTasks.length === 1 ? "" : "s"} tagged ${selectedTagFilter}`
           : `${visibleTasks.length} task${visibleTasks.length === 1 ? "" : "s"}`;
+
+  const breadcrumbItems = useMemo(() => {
+    const items: Array<{ label: string; action?: () => void }> = [{ label: "TaskMap", action: () => handleNav("tasks") }];
+    if (view === "tasks") {
+      items.push({ label: "Tasks", action: () => handleNav("tasks") });
+      if (focusedParent) items.push({ label: focusedParent.title, action: () => focusParent(focusedParent.id) });
+      else if (selectedTagFilter) items.push({ label: `Tag: ${selectedTagFilter}` });
+      else if (selectedProject) items.push({ label: `Project: ${selectedProject.name}`, action: () => openProject(selectedProject.id) });
+      else items.push({ label: "All Projects" });
+    } else if (view === "inbox") items.push({ label: "Inbox" });
+    else if (view === "today") items.push({ label: "Today" });
+    else if (view === "completed") items.push({ label: "Completed" });
+    else if (view === "map") items.push({ label: "Mind Map" });
+    else if (view === "calendar") items.push({ label: "Calendar" });
+    else if (view === "templates") items.push({ label: "Templates" });
+    else if (view === "settings") items.push({ label: "Settings" }, { label: "About" });
+    if (selected && view !== "settings" && view !== "templates") items.push({ label: selected.title });
+    return items;
+  }, [view, focusedParent?.id, focusedParent?.title, selectedTagFilter, selectedProject?.id, selectedProject?.name, selected?.id, selected?.title]);
 
   return (
     <div className="app-shell">
@@ -480,6 +593,7 @@ export default function TaskMapApp() {
             {online ? <Wifi size={15} /> : <CloudOff size={15} />}
             <span>{online ? `${pending} local change${pending === 1 ? "" : "s"}` : `Offline · ${pending} pending`}</span>
           </div>
+          <button className={view === "settings" ? "settings-nav-button active" : "settings-nav-button"} onClick={() => handleNav("settings")}><SettingsIcon size={16}/><span>Settings</span></button>
         </div>
       </aside>
 
@@ -488,8 +602,11 @@ export default function TaskMapApp() {
           <div className="search"><Search size={17} /><input id="task-search" value={searchQuery} onChange={event => setSearchQuery(event.target.value)} placeholder="Search tasks" aria-label="Search tasks" />{searchQuery && <button className="clear-search" onClick={() => setSearchQuery("")} aria-label="Clear search"><X size={14} /></button>}<kbd>Ctrl K</kbd></div>
           <div className="topbar-actions"><button className="ask-taskmap-button" onClick={() => { setSelectedId(null); setAssistantOpen(true); }}><Sparkles size={15} /> Ask TaskMap</button><button className="avatar">BC</button></div>
         </header>
+        <div className="main-breadcrumb" aria-label="Breadcrumb">{breadcrumbItems.map((item,index)=><span key={`${item.label}-${index}`} className="breadcrumb-part">{index>0&&<b>›</b>}{item.action?<button onClick={item.action}>{item.label}</button>:<span>{item.label}</span>}</span>)}</div>
 
-        {view === "map" ? (
+        {view === "settings" ? (
+          <SettingsView />
+        ) : view === "map" ? (
           <MindMapView tasks={tasks} projects={projects} onSelect={setSelectedId} />
         ) : view === "calendar" ? (
           <CalendarView tasks={projectScoped} onSelect={setSelectedId} />
@@ -532,7 +649,7 @@ export default function TaskMapApp() {
               <div className="task-panel-header task-panel-toolbar">
                 <div><h2>{view === "today" ? "Today’s tasks" : view === "completed" ? "Completed tasks" : "Tasks"}</h2><span>{visibleTasks.filter(task => task.status !== "done").length} open</span></div>
                 <div className="task-toolbar-actions">
-                  {(["tasks","today","inbox","completed"] as View[]).includes(view) && <>{bulkMode ? <><span className="bulk-count">{bulkSelected.size} selected</span><button className="danger-button compact" disabled={!bulkSelected.size} onClick={() => requestDelete([...bulkSelected], "bulk")}><Trash2 size={13}/> Delete</button><button className="ghost-button compact" onClick={() => { setBulkMode(false); setBulkSelected(new Set()); }}>Done</button></> : <button className="ghost-button compact" onClick={() => { setBulkMode(true); setBulkSelected(new Set()); }}>Select</button>}</>}
+                  {(["tasks","today","inbox","completed"] as View[]).includes(view) && <>{bulkMode ? <><span className="bulk-count">{bulkSelected.size} selected</span><button className="ghost-button compact" disabled={!visibleTasks.length} onClick={toggleSelectAllVisible}>{visibleTasks.length>0&&visibleTasks.every(task=>bulkSelected.has(task.id))?"Clear all":"Select all"}</button><button className="danger-button compact" disabled={!bulkSelected.size} onClick={() => requestDelete([...bulkSelected], "bulk")}><Trash2 size={13}/> Delete</button><button className="ghost-button compact" onClick={() => { setBulkMode(false); setBulkSelected(new Set()); }}>Done</button></> : <button className="ghost-button compact" onClick={() => { setBulkMode(true); setBulkSelected(new Set()); }}>Select</button>}</>}
                   {view !== "completed" && <label className="compact-toggle"><input type="checkbox" checked={showCompleted} onChange={event => setShowCompleted(event.target.checked)} /> Show completed</label>}
                   <label className="sort-control">Sort
                     <select value={sortMode} onChange={event => setSortMode(event.target.value as TaskSortMode)}>
@@ -548,8 +665,9 @@ export default function TaskMapApp() {
               </div>
               {view !== "completed" && <div className="quick-add"><Plus size={18} /><input id="quick-task" value={quickTitle} onChange={event => setQuickTitle(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addQuickTask(); }} placeholder={focusedParent ? `Add subtask(s) under ${focusedParent.title} — commas supported` : "Add task(s) — separate multiple with commas"} /></div>}
               <div className="task-list">
-                {displayEntries.length === 0 ? <div className="empty-state">No tasks match this view.</div> : displayEntries.map(({ task, depth }, index) => (
-                  <TaskRow
+                {displayEntries.length === 0 ? <div className="empty-state">No tasks match this view.</div> : displayEntries.map(({ task, depth }, index) => {
+                  const recurringUi = recurringUiForTask(task);
+                  return <TaskRow
                     key={task.id}
                     task={task}
                     depth={depth}
@@ -572,8 +690,12 @@ export default function TaskMapApp() {
                     onProjectClick={projectId => openProject(projectId)}
                     onParentClick={parentId => focusParent(parentId)}
                     onTagClick={tag => focusTag(tag)}
-                  />
-                ))}
+                    onToggle={() => void handleToggleTask(task)}
+                    recurringState={recurringUi.state}
+                    checkboxProtected={recurringUi.protected}
+                    nextOccurrenceLabel={recurringUi.nextLabel}
+                  />;
+                })}
               </div>
             </div>
 
@@ -610,19 +732,33 @@ export default function TaskMapApp() {
           onFocusParent={focusParent}
           onTagClick={tag => focusTag(tag, selected.id)}
           onRequestDelete={() => requestDelete([selected.id], "single")}
+          onToggleTask={() => void handleToggleTask(selected)}
+          onProjectChange={requestProjectChange}
         />
       )}
       {deleteRequest && <DeleteTasksDialog request={deleteRequest} tasks={tasks} onCancel={() => setDeleteRequest(null)} onDelete={async mode => { await deleteTaskSet(deleteRequest.ids, mode); const removed = new Set(deleteRequest.ids); if (selectedId && removed.has(selectedId)) setSelectedId(null); setBulkSelected(new Set()); setBulkMode(false); setDeleteRequest(null); }} />}
+      {projectChangeRequest && <ProjectChangeDialog request={projectChangeRequest} tasks={tasks} projects={projects} onCancel={() => setProjectChangeRequest(null)} onChange={async includeDescendants => { await changeTaskProject(projectChangeRequest.taskId, projectChangeRequest.projectId, includeDescendants); setProjectChangeRequest(null); }} />}
       {assistantOpen && <AssistantPanel tasks={tasks} projects={projects} onClose={() => setAssistantOpen(false)} onExecuteAction={executeAssistantAction} />}
     </div>
   );
+}
+
+
+function SettingsView() {
+  return <section className="content settings-page">
+    <div className="page-heading"><div><p className="eyebrow">Application settings</p><h1>Settings</h1><p className="subtitle">Configure TaskMap and review build information.</p></div></div>
+    <div className="settings-grid">
+      <section className="settings-card"><div><SettingsIcon size={18}/><h2>General</h2></div><p>TaskMap settings will live here as app-wide preferences are added.</p><div className="settings-row"><span>Offline-first storage</span><strong>Enabled</strong></div><div className="settings-row"><span>AI environment variable</span><code>OPENAI_API_KEY</code></div></section>
+      <section className="settings-card about-card"><div><GitBranch size={18}/><h2>About</h2></div><p>TaskMap local-first task planning and mind-map workspace.</p><div className="about-version"><span>Version</span><strong>TaskMap v{APP_VERSION}</strong></div><small>Build version is sourced from one shared application constant.</small></section>
+    </div>
+  </section>;
 }
 
 function StatFilterCard({ label, value, detail, active, danger = false, onClick }: { label: string; value: number; detail: string; active: boolean; danger?: boolean; onClick: () => void }) {
   return <button className={`stat-card stat-filter ${active ? "active" : ""} ${danger ? "danger" : ""}`} aria-pressed={active} onClick={onClick}><span>{label}</span><strong>{value}</strong><small>{detail}</small></button>;
 }
 
-function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, bulkChecked, onBulkToggle, manual, isFirst, isLast, onMove, onDragStart, onDragHover, dropMode, onDrop, onDragEnd, onProjectClick, onParentClick, onTagClick }: {
+function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, bulkChecked, onBulkToggle, manual, isFirst, isLast, onMove, onDragStart, onDragHover, dropMode, onDrop, onDragEnd, onProjectClick, onParentClick, onTagClick, onToggle, recurringState, checkboxProtected, nextOccurrenceLabel }: {
   task: Task;
   depth: number;
   project: Project | null;
@@ -644,6 +780,10 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
   onProjectClick: (projectId: string) => void;
   onParentClick: (parentId: string) => void;
   onTagClick: (tag: string) => void;
+  onToggle: () => void;
+  recurringState: "completed" | "next" | null;
+  checkboxProtected: boolean;
+  nextOccurrenceLabel: string;
 }) {
   function modeFromEvent(event: DragEvent<HTMLDivElement>): DropMode {
     const box = event.currentTarget.getBoundingClientRect();
@@ -653,9 +793,11 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
     return "nest";
   }
 
+  const visuallyDone = task.status === "done" || recurringState === "completed";
+
   return (
     <div
-      className={`${selected ? "task-row selected" : "task-row"} ${task.status === "done" ? "completed-row" : ""} ${dropMode ? `drop-${dropMode}` : ""}`}
+      className={`${selected ? "task-row selected" : "task-row"} ${visuallyDone ? "completed-row" : ""} ${recurringState ? `recurring-transition-${recurringState}` : ""} ${dropMode ? `drop-${dropMode}` : ""}`}
       style={{ paddingLeft: `${18 + depth * 26}px` }}
       onClick={onSelect}
       draggable
@@ -666,10 +808,10 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
     >
       {bulkMode && <label className="bulk-task-check" onClick={event => event.stopPropagation()}><input type="checkbox" checked={bulkChecked} onChange={onBulkToggle} aria-label={`Select ${task.title}`} /></label>}
       <span className="drag-handle" title={manual ? "Drag between tasks to reorder, onto a task to make it a subtask, or onto a sidebar project" : "Drag onto a sidebar project to assign this task"} aria-hidden="true">⋮⋮</span>
-      <button className="check-button" aria-label={task.status === "done" ? `Reopen ${task.title}` : `Complete ${task.title}`} onClick={event => { event.stopPropagation(); void toggleTaskComplete(task); }}>{task.status === "done" ? <CheckCircle2 size={21} /> : <Circle size={21} />}</button>
+      <button className="check-button" disabled={checkboxProtected} title={checkboxProtected ? "Protected briefly so the next recurring occurrence is not completed accidentally" : undefined} aria-label={visuallyDone ? `Reopen ${task.title}` : `Complete ${task.title}`} onClick={event => { event.stopPropagation(); if (!checkboxProtected) onToggle(); }}>{visuallyDone ? <CheckCircle2 size={21} /> : <Circle size={21} />}</button>
       <div className="task-copy">
-        <strong className={task.status === "done" ? "done" : ""}>{task.title}</strong>
-        <div className="task-meta">{task.startTime && <span>{formatTime(task.startTime)}</span>}{task.estimatedMinutes != null && <span>{formatDuration(task.estimatedMinutes)}</span>}{task.dueDate && <span>Due {task.dueDate === localDateOnly() ? "today" : task.dueDate}</span>}{task.status === "done" && task.completedAt && <span>Completed {new Date(task.completedAt).toLocaleDateString()}</span>}{task.recurrence?.enabled && <span className="repeat-badge"><Repeat2 size={11}/> {recurrenceLabel(task.recurrence)}</span>}</div>
+        <strong className={visuallyDone ? "done" : ""}>{task.title}</strong>
+        <div className="task-meta">{task.startTime && <span>{formatTime(task.startTime)}</span>}{task.estimatedMinutes != null && <span>{formatDuration(task.estimatedMinutes)}</span>}{task.dueDate && <span>Due {task.dueDate === localDateOnly() ? "today" : task.dueDate}</span>}{task.status === "done" && task.completedAt && <span>Completed {new Date(task.completedAt).toLocaleDateString()}</span>}{task.recurrence?.enabled && <span className="repeat-badge"><Repeat2 size={11}/> {recurrenceLabel(task.recurrence)}</span>}{recurringState === "completed" && <span className="recurring-transition-badge completed">✓ Completed · {nextOccurrenceLabel === "Series complete" ? "Series complete" : `Next ${nextOccurrenceLabel}`}</span>}{recurringState === "next" && <span className="recurring-transition-badge next"><Repeat2 size={11}/> Next occurrence{checkboxProtected ? " · checkbox protected" : ""}</span>}</div>
         {(project || parent || (task.tags ?? []).length > 0) && <div className="task-tags">
           {project && <button className="task-tag project-tag" onClick={event => { event.stopPropagation(); onProjectClick(project.id); }}>Project: {project.name}</button>}
           {parent && <button className="task-tag parent-tag" onClick={event => { event.stopPropagation(); onParentClick(parent.id); }}>Parent: {parent.title}</button>}
@@ -868,6 +1010,47 @@ function RichNotesModal({ task, onClose }: { task: Task; onClose: () => void }) 
   </div></div>;
 }
 
+
+function TagEditor({ task, tasks, onTagClick }: { task: Task; tasks: Task[]; onTagClick: (tag: string) => void }) {
+  const [query,setQuery] = useState("");
+  const [open,setOpen] = useState(false);
+  const counts = useMemo(() => {
+    const map = new Map<string,{label:string;count:number}>();
+    for (const candidate of tasks) for (const tag of candidate.tags ?? []) {
+      const key = tag.trim().toLowerCase();
+      if (!key) continue;
+      const current = map.get(key);
+      map.set(key,{label:current?.label ?? tag.trim(),count:(current?.count ?? 0)+1});
+    }
+    return [...map.values()].sort((a,b)=>b.count-a.count || a.label.localeCompare(b.label));
+  },[tasks]);
+  const selected = new Set((task.tags ?? []).map(tag=>tag.toLowerCase()));
+  const normalizedQuery=query.trim().toLowerCase();
+  const matches = counts.filter(item=>!selected.has(item.label.toLowerCase()) && item.label.toLowerCase().includes(normalizedQuery));
+  const exactMatch = matches.find(item=>item.label.toLowerCase()===normalizedQuery);
+  const filtered = exactMatch ? [exactMatch,...matches.filter(item=>item!==exactMatch)].slice(0,5) : matches.slice(0,5);
+  const exactExists = counts.some(item=>item.label.toLowerCase()===normalizedQuery);
+  const canCreate = Boolean(query.trim()) && !selected.has(query.trim().toLowerCase()) && !exactExists;
+
+  async function addTag(tag:string) {
+    const clean=tag.trim(); if(!clean) return;
+    const existing=(task.tags ?? []).find(item=>item.toLowerCase()===clean.toLowerCase());
+    if(existing){setQuery("");setOpen(true);return;}
+    await updateTask(task.id,{tags:[...(task.tags ?? []),clean]},"TASK_TAG_ADDED");
+    setQuery(""); setOpen(true);
+  }
+  async function removeTag(tag:string) {
+    await updateTask(task.id,{tags:(task.tags ?? []).filter(item=>item!==tag)},"TASK_TAG_REMOVED");
+    setOpen(true);
+  }
+  return <div className="tag-editor">
+    {(task.tags ?? []).length>0&&<div className="detail-tag-chips">{(task.tags ?? []).map(tag=><span key={tag} className="editable-tag-chip"><button className="task-tag label-tag" onClick={()=>onTagClick(tag)}>Tag: {tag}</button><button className="tag-remove" onClick={()=>void removeTag(tag)} aria-label={`Remove ${tag}`}>×</button></span>)}</div>}
+    <div className="tag-input-wrap"><input value={query} onFocus={()=>setOpen(true)} onChange={e=>{setQuery(e.target.value);setOpen(true)}} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();const first=filtered[0]?.label;if(first&&!canCreate)void addTag(first);else if(query.trim())void addTag(exactExists?(counts.find(item=>item.label.toLowerCase()===query.trim().toLowerCase())?.label ?? query):query);}if(e.key==="Escape")setOpen(false);}} onBlur={()=>window.setTimeout(()=>setOpen(false),120)} placeholder="Add tag…" />
+      {open&&<div className="tag-suggestions" onMouseDown={e=>e.preventDefault()}>{filtered.map(item=><button key={item.label} onClick={()=>void addTag(item.label)}><span>{item.label}</span><small>{item.count} task{item.count===1?"":"s"}</small></button>)}{canCreate&&<button className="create-tag-suggestion" onClick={()=>void addTag(query)}><span>Create “{query.trim()}”</span><small>new tag</small></button>}{!filtered.length&&!canCreate&&<div className="tag-suggestion-empty">No more matching tags</div>}</div>}
+    </div>
+  </div>;
+}
+
 function RecurrenceEditor({ task }: { task: Task }) {
   const [open, setOpen] = useState(Boolean(task.recurrence?.enabled));
   const [draft, setDraft] = useState<RecurrenceRule>(()=>({ ...defaultRecurrenceRule(), ...(task.recurrence ?? {}) }));
@@ -909,14 +1092,14 @@ function RecurrenceEditor({ task }: { task: Task }) {
   </div>;
 }
 
-type InspectorFieldKey = "status"|"priority"|"project"|"parent"|"duration"|"startDate"|"startTime"|"dueDate"|"dueTime"|"tags"|"repeat"|"notes";
-const defaultInspectorFieldOrder: InspectorFieldKey[] = ["status","priority","project","parent","duration","startDate","startTime","dueDate","dueTime","tags","repeat","notes"];
-const defaultInspectorFieldRows: InspectorFieldKey[][] = [["status","priority"],["project","parent"],["duration","startDate"],["startTime","dueDate"],["dueTime"],["tags"],["repeat"],["notes"]];
+type InspectorFieldKey = "status"|"priority"|"project"|"parent"|"duration"|"startDate"|"startTime"|"dueDate"|"dueTime"|"tags"|"repeat"|"notes"|"showHierarchy"|"saveTemplate";
+const defaultInspectorFieldOrder: InspectorFieldKey[] = ["status","priority","project","parent","duration","startDate","startTime","dueDate","dueTime","tags","repeat","notes","showHierarchy","saveTemplate"];
+const defaultInspectorFieldRows: InspectorFieldKey[][] = [["status","priority"],["project","parent"],["duration","startDate"],["startTime","dueDate"],["dueTime"],["tags"],["repeat"],["notes"],["showHierarchy"],["saveTemplate"]];
 type InspectorDropMode = "before"|"after"|"left"|"right";
 type InspectorDropTarget = { anchor: InspectorFieldKey; mode: InspectorDropMode };
 
 function rowsFromLegacyOrder(order: InspectorFieldKey[]) {
-  const fullByDefault = new Set<InspectorFieldKey>(["tags","repeat","notes"]);
+  const fullByDefault = new Set<InspectorFieldKey>(["tags","repeat","notes","showHierarchy","saveTemplate"]);
   const rows: InspectorFieldKey[][] = [];
   let pending: InspectorFieldKey | null = null;
   for (const key of order) {
@@ -966,8 +1149,26 @@ function moveInspectorField(rows: InspectorFieldKey[][], field: InspectorFieldKe
 }
 
 function DraggableInspectorField({ fieldKey, label, singleRow, dragging, onDragStart, onDragEnd, children }: { fieldKey: InspectorFieldKey; label: string; singleRow: boolean; dragging: boolean; onDragStart:(key:InspectorFieldKey)=>void; onDragEnd:()=>void; children:ReactNode }) {
-  return <div className={`detail-field draggable-detail-field ${singleRow?"span-two":""} ${dragging?"dragging-field":""}`}>
-    <span className="detail-field-drag-label" title="Drag to reposition field" draggable onDragStart={e=>{e.dataTransfer.effectAllowed="move";e.dataTransfer.setData("text/plain",fieldKey);onDragStart(fieldKey);}} onDragEnd={onDragEnd}><b>⋮⋮</b>{label}</span>
+  const untitled = !label;
+  return <div
+    className={`detail-field draggable-detail-field ${singleRow?"span-two":""} ${dragging?"dragging-field":""} ${untitled?"untitled-action-field":""}`}
+    data-inspector-field={fieldKey}
+    draggable
+    onDragStart={event=>{
+      const target=event.target as HTMLElement | null;
+      if(!target?.closest('[data-inspector-drag-handle="true"]')){event.preventDefault();return;}
+      event.dataTransfer.effectAllowed="move";
+      event.dataTransfer.setData("text/plain",fieldKey);
+      onDragStart(fieldKey);
+    }}
+    onDragEnd={onDragEnd}
+  >
+    <span
+      className={`detail-field-drag-label ${untitled?"untitled-action-handle":""}`}
+      data-inspector-drag-handle="true"
+      aria-label={untitled?"Drag action to reposition":undefined}
+      title={untitled?"Drag to reposition action":"Drag to reposition field"}
+    ><b>⋮⋮</b>{label&&<span>{label}</span>}</span>
     {children}
   </div>;
 }
@@ -976,7 +1177,7 @@ function InspectorDropZone({ active, className, label, onHover, onDrop }: { acti
   return <div className={`${className} ${active?"active":""}`} aria-label={label} onDragEnter={event=>{event.preventDefault();onHover();}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect="move";onHover();}} onDrop={event=>{event.preventDefault();onDrop();}}><span>{label}</span></div>;
 }
 
-function TaskInspector({ task, tasks, projects, onClose, onOpenTask, onFocusParent, onTagClick, onRequestDelete }: { task: Task; tasks: Task[]; projects: Project[]; onClose: () => void; onOpenTask: (id: string) => void; onFocusParent: (id: string) => void; onTagClick: (tag: string) => void; onRequestDelete: () => void }) {
+function TaskInspector({ task, tasks, projects, onClose, onOpenTask, onFocusParent, onTagClick, onRequestDelete, onToggleTask, onProjectChange }: { task: Task; tasks: Task[]; projects: Project[]; onClose: () => void; onOpenTask: (id: string) => void; onFocusParent: (id: string) => void; onTagClick: (tag: string) => void; onRequestDelete: () => void; onToggleTask: () => void; onProjectChange: (taskId: string, projectId: string | null) => Promise<void> }) {
   const descendants = descendantIds(tasks, task.id);
   const parent = task.parentTaskId ? tasks.find(candidate => candidate.id === task.parentTaskId) ?? null : null;
   const parentOptions = tasks.filter(candidate => candidate.id !== task.id && !descendants.has(candidate.id));
@@ -1003,18 +1204,20 @@ function TaskInspector({ task, tasks, projects, onClose, onOpenTask, onFocusPare
   }
 
   const fields: Record<InspectorFieldKey,{label:string;content:ReactNode}> = {
-    status:{label:"Status",content:<BufferedSelect value={task.status} onCommit={async value => { const next = value as Task["status"]; if ((next === "done") !== (task.status === "done")) { await toggleTaskComplete(task); if (next !== "done" && next !== "not_started") await updateTask(task.id, { status: next }, "TASK_STATUS_CHANGED"); return; } await updateTask(task.id, { status: next }, "TASK_STATUS_CHANGED"); }}><option value="not_started">Not started</option><option value="in_progress">In progress</option><option value="blocked">Blocked</option><option value="done">Done</option></BufferedSelect>},
+    status:{label:"Status",content:<BufferedSelect value={task.status} onCommit={async value => { const next = value as Task["status"]; if ((next === "done") !== (task.status === "done")) { await onToggleTask(); if (next !== "done" && next !== "not_started") await updateTask(task.id, { status: next }, "TASK_STATUS_CHANGED"); return; } await updateTask(task.id, { status: next }, "TASK_STATUS_CHANGED"); }}><option value="not_started">Not started</option><option value="in_progress">In progress</option><option value="blocked">Blocked</option><option value="done">Done</option></BufferedSelect>},
     priority:{label:"Priority",content:<BufferedSelect value={task.priority} onCommit={value => updateTask(task.id, { priority: value as Task["priority"] }, "TASK_PRIORITY_CHANGED")}><option value="urgent">Urgent</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></BufferedSelect>},
-    project:{label:"Project",content:<BufferedSelect value={task.projectId ?? ""} onCommit={value => updateTask(task.id, { projectId: value || null }, "TASK_PROJECT_CHANGED")}><option value="">No project</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</BufferedSelect>},
+    project:{label:"Project",content:<BufferedSelect value={task.projectId ?? ""} onCommit={async value => { const nextProjectId=value||null; if(nextProjectId===task.projectId)return; await onProjectChange(task.id,nextProjectId); }}><option value="">No project</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</BufferedSelect>},
     parent:{label:"Parent task",content:<><BufferedSelect value={task.parentTaskId ?? ""} onCommit={value => updateTask(task.id, { parentTaskId: value || null }, "TASK_PARENT_CHANGED")}><option value="">No parent</option>{parentOptions.map(candidate => <option key={candidate.id} value={candidate.id}>{candidate.title}</option>)}</BufferedSelect>{parent && <button className="parent-link-button" onClick={() => onFocusParent(parent.id)}>Focus parent: {parent.title}</button>}</>},
     duration:{label:"Duration",content:<BufferedInput type="number" min="0" step="15" value={task.estimatedMinutes == null ? "" : String(task.estimatedMinutes)} onCommit={value => updateTask(task.id, { estimatedMinutes: value === "" ? null : Math.max(0, Number(value)) }, "TASK_DURATION_CHANGED")} placeholder="minutes" />},
     startDate:{label:"Start date",content:<BufferedInput type="date" value={task.startDate ?? ""} onCommit={value => updateTask(task.id, { startDate: value || null }, "TASK_START_DATE_CHANGED")} />},
     startTime:{label:"Start time",content:<BufferedInput type="time" value={task.startTime ?? ""} onCommit={value => updateTask(task.id, { startTime: value || null }, "TASK_START_TIME_CHANGED")} />},
     dueDate:{label:"Due date",content:<BufferedInput type="date" value={task.dueDate ?? ""} onCommit={value => updateTask(task.id, { dueDate: value || null }, "TASK_DUE_DATE_CHANGED")} />},
     dueTime:{label:"Due time",content:<BufferedInput type="time" value={task.dueTime ?? ""} onCommit={value => updateTask(task.id, { dueTime: value || null }, "TASK_DUE_TIME_CHANGED")} />},
-    tags:{label:"Tags",content:<><BufferedInput value={(task.tags ?? []).join(", ")} onCommit={value => updateTask(task.id, { tags: value.split(",").map(tag => tag.trim()).filter(Boolean) }, "TASK_TAGS_CHANGED")} placeholder="work, follow-up, calls" />{(task.tags ?? []).length > 0 && <div className="detail-tag-chips">{(task.tags ?? []).map((tag, tagIndex) => <button key={`${tag}-${tagIndex}`} className="task-tag label-tag" onClick={() => onTagClick(tag)}>Tag: {tag}</button>)}</div>}</>},
+    tags:{label:"Tags",content:<TagEditor task={task} tasks={tasks} onTagClick={onTagClick}/>},
     repeat:{label:"Repeat",content:<RecurrenceEditor task={task}/>},
     notes:{label:"Notes",content:<NotesField task={task}/>},
+    showHierarchy:{label:"",content:<button className="focus-hierarchy-button inspector-action-block" onClick={() => onFocusParent(task.id)}>Show this task + all subtasks</button>},
+    saveTemplate:{label:"",content:<button className="save-template-button inspector-action-block" onClick={async () => { const name = window.prompt("Template name", task.title); if (name?.trim()) await saveTaskHierarchyAsTemplate(task.id, name); }}><FileStack size={14}/> Save task + subtasks as template</button>},
   };
 
   return <aside className="inspector">
@@ -1040,7 +1243,6 @@ function TaskInspector({ task, tasks, projects, onClose, onOpenTask, onFocusPare
         </div>;
       })}
     </div>
-    <div className="inspector-utility-actions"><button className="focus-hierarchy-button" onClick={() => onFocusParent(task.id)}>Show this task + all subtasks</button><button className="save-template-button" onClick={async () => { const name = window.prompt("Template name", task.title); if (name?.trim()) await saveTaskHierarchyAsTemplate(task.id, name); }}><FileStack size={14}/> Save task + subtasks as template</button></div>
     <HistoryPanel taskId={task.id} />
     <div className="inspector-danger-zone"><button className="danger-button delete-task-button" onClick={onRequestDelete}><Trash2 size={14}/> Delete Task</button></div>
   </aside>;
@@ -1053,4 +1255,13 @@ function DeleteTasksDialog({ request, tasks, onCancel, onDelete }: { request:{id
   const [working,setWorking]=useState(false);
   async function go(mode:"cascade"|"orphan"){setWorking(true);await onDelete(mode);setWorking(false);}
   return <div className="delete-modal-backdrop"><div className="delete-modal"><div className="delete-modal-icon"><Trash2 size={20}/></div><div><p className="eyebrow">Delete {request.source==="bulk"?`${roots.length} tasks`:"task"}</p><h2>{request.source==="single"?roots[0]?.title:`${roots.length} selected tasks`}</h2><p>{hasChildren?"At least one selected task has children. Choose what should happen to the hierarchy.":"This task will be removed from active views but kept as a tombstone in transaction history."}</p></div>{hasChildren?<div className="delete-choice-list"><button disabled={working} className="danger-choice" onClick={()=>void go("cascade")}><strong>Delete parent + all descendants</strong><span>Deletes every nested child below the selected parent task(s).</span></button><button disabled={working} onClick={()=>void go("orphan")}><strong>Delete parent only</strong><span>Direct children become top-level tasks; their own children stay attached.</span></button></div>:<button disabled={working} className="danger-button full" onClick={()=>void go("orphan")}>Delete {roots.length===1?"Task":`${roots.length} Tasks`}</button>}<button className="ghost-button full" disabled={working} onClick={onCancel}>Cancel</button></div></div>;
+}
+
+function ProjectChangeDialog({ request, tasks, projects, onCancel, onChange }: { request:{taskId:string;projectId:string|null}; tasks:Task[]; projects:Project[]; onCancel:()=>void; onChange:(includeDescendants:boolean)=>Promise<void> }) {
+  const task=tasks.find(candidate=>candidate.id===request.taskId)??null;
+  const project=request.projectId?projects.find(candidate=>candidate.id===request.projectId)??null:null;
+  const descendantCount=task?descendantIds(tasks,task.id).size:0;
+  const [working,setWorking]=useState(false);
+  async function go(includeDescendants:boolean){setWorking(true);await onChange(includeDescendants);setWorking(false);}
+  return <div className="delete-modal-backdrop"><div className="delete-modal"><div className="delete-modal-icon project-change-modal-icon"><FileStack size={20}/></div><div><p className="eyebrow">Change parent project</p><h2>{task?.title ?? "Parent task"}</h2><p>Move this parent to <strong>{project?.name ?? "No project"}</strong>. Choose whether its {descendantCount} subtask{descendantCount===1?"":"s"} should follow it.</p></div><div className="delete-choice-list"><button disabled={working} onClick={()=>void go(true)}><strong>Change parent + all subtasks</strong><span>Moves every nested descendant to the same project.</span></button><button disabled={working} onClick={()=>void go(false)}><strong>Change parent only</strong><span>Leaves all subtasks in their current projects.</span></button></div><button className="ghost-button full" disabled={working} onClick={onCancel}>Cancel</button></div></div>;
 }

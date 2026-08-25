@@ -122,6 +122,55 @@ export async function updateTask(id: string, patch: Partial<Task>, actionType = 
   return db.tasks.get(id);
 }
 
+
+export async function changeTaskProject(taskId: string, projectId: string | null, includeDescendants: boolean) {
+  const allTasks = await db.tasks.filter(task => !task.deletedAt).toArray();
+  const root = allTasks.find(task => task.id === taskId);
+  if (!root) throw new Error("Task not found");
+  const ids = new Set<string>([taskId]);
+  if (includeDescendants) {
+    const queue = [taskId];
+    while (queue.length) {
+      const parentId = queue.shift()!;
+      for (const child of allTasks.filter(task => task.parentTaskId === parentId)) {
+        if (ids.has(child.id)) continue;
+        ids.add(child.id);
+        queue.push(child.id);
+      }
+    }
+  }
+  const now = nowIso();
+  const groupId = crypto.randomUUID();
+  await db.transaction("rw", db.tasks, db.transactions, db.transactionChanges, async () => {
+    for (const id of ids) {
+      const before = await db.tasks.get(id);
+      if (!before || before.projectId === projectId) continue;
+      const patch: Partial<Task> = { projectId, updatedAt: now, revision: before.revision + 1 };
+      await db.tasks.update(id, patch);
+      const txId = crypto.randomUUID();
+      await db.transactions.add({
+        id: txId,
+        entityType: "task",
+        entityId: id,
+        actionType: id === taskId ? "TASK_PROJECT_CHANGED" : "TASK_PROJECT_CHANGED_WITH_PARENT",
+        groupId,
+        deviceId: getDeviceId(),
+        clientTimestamp: now,
+        serverReceivedTimestamp: null,
+        baseRevision: before.revision,
+        resultRevision: before.revision + 1,
+        syncStatus: "pending",
+      });
+      await db.transactionChanges.bulkAdd([
+        { id: crypto.randomUUID(), transactionId: txId, fieldName: "projectId", oldValue: before.projectId, newValue: projectId },
+        { id: crypto.randomUUID(), transactionId: txId, fieldName: "updatedAt", oldValue: before.updatedAt, newValue: now },
+        { id: crypto.randomUUID(), transactionId: txId, fieldName: "revision", oldValue: before.revision, newValue: before.revision + 1 },
+      ]);
+    }
+  });
+  return db.tasks.get(taskId);
+}
+
 export async function deleteTaskSet(taskIds: string[], childMode: "cascade" | "orphan") {
   const uniqueRoots = [...new Set(taskIds)];
   if (!uniqueRoots.length) return;
@@ -221,11 +270,16 @@ export async function toggleTaskComplete(task: Task) {
       const completed = await db.tasks.get(task.id);
       const next = completed ? nextOccurrence(completed) : null;
       if (completed && next) {
-        await createTask({
+        const seriesId = completed.recurrenceSeriesId ?? completed.id;
+        const desiredOccurrence = (completed.recurrenceOccurrence ?? 1) + 1;
+        const existingSeries = await db.tasks.where("recurrenceSeriesId").equals(seriesId).filter(candidate => !candidate.deletedAt).toArray();
+        const alreadyAdvanced = existingSeries.some(candidate => (candidate.recurrenceOccurrence ?? 0) >= desiredOccurrence);
+        const duplicateDateTime = existingSeries.some(candidate => candidate.startDate === next.date && candidate.startTime === next.time);
+        if (!alreadyAdvanced && !duplicateDateTime) await createTask({
           title: completed.title, notes: completed.notes, tags: completed.tags, priority: completed.priority,
           projectId: completed.projectId, parentTaskId: completed.parentTaskId, startDate: next.date, startTime: next.time,
           estimatedMinutes: completed.estimatedMinutes, dueDate: shiftDateByOffset(completed.dueDate, completed.startDate, next.date), dueTime: completed.dueTime,
-          recurrence: completed.recurrence, recurrenceSeriesId: completed.recurrenceSeriesId ?? completed.id, recurrenceOccurrence: (completed.recurrenceOccurrence ?? 1) + 1,
+          recurrence: completed.recurrence, recurrenceSeriesId: seriesId, recurrenceOccurrence: desiredOccurrence,
         });
       }
     }
@@ -834,10 +888,30 @@ export async function seedQaChecklist() {
     { title: "Expanded Notes supports rich HTML content", notes: "Use headings, bold/italic, lists, links, and pasted HTML in expanded Notes and confirm sanitized formatting persists.", priority: "normal" },
     { title: "Expanded Notes accepts pasted or dropped images", notes: "Paste or drag an image into expanded Notes and confirm it renders and persists with the task note.", priority: "normal" },
     // V8: newest asks and bug fixes stay urgent so they sort to the top for validation.
-    { title: "Task cards show clickable Tag chips", notes: "Add one or more tags to a task. Confirm each tag appears beside Project/Parent as a clickable chip and clicking it filters Tasks to that tag.", priority: "urgent" },
-    { title: "Task Details Tag chips are clickable filters", notes: "Open a tagged task, click one of its Tag chips in Task Details, and confirm Tasks switches to a tag-focused view while keeping the selected task visible.", priority: "urgent" },
-    { title: "Task Details drag highlights exact destination", notes: "Drag a Task Details field by its label. Confirm a clear indigo drop target shows whether the field will become its own row or occupy the left/right column beside a single field.", priority: "urgent" },
-    { title: "Task Details rows do not auto-repack after a move", notes: "Move one field out of a two-field row. Confirm the remaining field expands across both columns and fields from the next row do not jump upward automatically.", priority: "urgent" },
+    { title: "Task cards show clickable Tag chips", notes: "Add one or more tags to a task. Confirm each tag appears beside Project/Parent as a clickable chip and clicking it filters Tasks to that tag.", priority: "normal" },
+    { title: "Task Details Tag chips are clickable filters", notes: "Open a tagged task, click one of its Tag chips in Task Details, and confirm Tasks switches to a tag-focused view while keeping the selected task visible.", priority: "normal" },
+    { title: "Task Details drag highlights exact destination", notes: "Drag a Task Details field by its label. Confirm a clear indigo drop target shows whether the field will become its own row or occupy the left/right column beside a single field.", priority: "normal" },
+    { title: "Task Details rows do not auto-repack after a move", notes: "Move one field out of a two-field row. Confirm the remaining field expands across both columns and fields from the next row do not jump upward automatically.", priority: "normal" },
+
+    // V9: newest asks and bug fixes stay urgent for focused validation.
+    { title: "Bulk delete has Select All for the visible filtered tasks", notes: "Enter Select mode in Tasks, Today, Inbox, or Completed. Click Select all and confirm every currently visible task is selected without selecting hidden tasks outside the current filter/search.", priority: "normal" },
+    { title: "Settings appears below Offline status", notes: "Confirm a Settings button appears in the lower-left sidebar directly below the offline/sync status area.", priority: "normal" },
+    { title: "Settings About shows the current TaskMap version", notes: "Open Settings and confirm About displays TaskMap v0.11.0 from the shared app version source.", priority: "normal" },
+    { title: "Every Task Details row supports field dragging", notes: "Drag fields from the first, middle, and lower rows by their labels. Confirm all fields can move and all destination rows accept drops.", priority: "normal" },
+    { title: "Untitled Task Details actions can be reordered", notes: "Drag Show this task + all subtasks and Save task + subtasks as a template using their small handle icons. Confirm neither action needs a visible field title.", priority: "normal" },
+    { title: "Tasks pane owns its scrollbar while Task Details is open", notes: "Open Task Details on a wide screen and scroll the Tasks list. Confirm the scrollbar is directly on the right edge of the Tasks pane rather than at the far-right edge of the window.", priority: "normal" },
+    { title: "Recurring reopen does not duplicate future Calendar occurrences", notes: "Create a repeating task, complete it, reopen the completed occurrence, then navigate to future Calendar dates. Confirm each expected occurrence appears once with no duplicate React key warning.", priority: "normal" },
+    { title: "Changing a parent Project asks about cascading to subtasks", notes: "Change a parent task's Project. Confirm TaskMap asks whether to change all descendants too; verify both parent-only and parent-plus-descendants paths.", priority: "normal" },
+    { title: "Tag editor suggests existing tags and stays open", notes: "Focus Tags and confirm the top five existing tags are suggested. Type to filter, select several tags without closing the suggestion box, and create a new tag when no exact tag exists.", priority: "normal" },
+    { title: "Main workspace keeps a clickable breadcrumb", notes: "Navigate across Tasks, project/parent/tag filters, Calendar, Templates, and Settings. Confirm a persistent breadcrumb appears at the top and earlier clickable segments navigate back appropriately.", priority: "normal" },
+
+    // V10: prior drag fix is now stable.
+    { title: "Task Details lower rows can initiate and receive field drags", notes: "Open Task Details, grab a field label from the third or later row, move it to another lower or upper row, refresh TaskMap, and confirm the moved layout persists. Repeat with an untitled action handle.", priority: "normal" },
+
+    // V11: current asks and bug fixes stay urgent for focused validation.
+    { title: "Project cascade prompt uses the hierarchy decision modal", notes: "Change the Project on a parent from Task Details and by dropping it onto a sidebar project. Confirm both paths use the same styled decision modal as parent deletion, with parent-only, parent-plus-subtasks, and Cancel choices.", priority: "urgent" },
+    { title: "Recurring completion lingers and protects the next checkbox", notes: "Complete a recurring task from the list. Confirm the completed occurrence stays visible for about one second with its next-occurrence message, then the next task shows a Next occurrence badge and its checkbox is briefly protected from rapid/double clicks.", priority: "urgent" },
+    { title: "Calendar warns when a scheduled task has no real duration", notes: "Drag an unscheduled task with no estimated duration onto Calendar. Confirm the block shows a warning icon and explains that the displayed length is a placeholder. Resize it to set a duration and confirm the warning disappears.", priority: "urgent" },
   ];
 
   // Seed atomically. V5 preserves existing QA progress and only adds checklist entries that do not already exist.
@@ -853,7 +927,14 @@ export async function seedQaChecklist() {
       await db.transactionChanges.add({ id: crypto.randomUUID(), transactionId: projectTxId, fieldName: "__entity__", oldValue: null, newValue: qa });
     }
 
-    const existingTitles = new Set((await db.tasks.toArray()).map(task => task.title));
+    const existingQaTasks = (await db.tasks.where("projectId").equals(qa!.id).toArray()).filter(task => !task.deletedAt);
+    const desiredPriority = new Map(checklist.map(item => [item.title, item.priority ?? "normal"] as const));
+    const priorityUpdates = existingQaTasks.filter(task => desiredPriority.has(task.title) && task.priority !== desiredPriority.get(task.title));
+    if (priorityUpdates.length) {
+      const priorityNow = nowIso();
+      await db.tasks.bulkPut(priorityUpdates.map(task => ({ ...task, priority: desiredPriority.get(task.title)!, updatedAt: priorityNow, revision: task.revision + 1 })));
+    }
+    const existingTitles = new Set(existingQaTasks.map(task => task.title));
     const missing = checklist.filter(item => !existingTitles.has(item.title));
     if (!missing.length) return;
     const currentLast = await db.tasks.orderBy("manualOrder").last();

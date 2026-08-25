@@ -176,15 +176,36 @@ function minutesTime(value: number) {
   return `${String(Math.floor(normalized/60)).padStart(2,"0")}:${String(normalized%60).padStart(2,"0")}`;
 }
 
-/** Calendar-only recurrence expansion. These rows are never persisted. */
+/** Calendar-only recurrence expansion. These rows are never persisted.
+ * One canonical task drives each recurrence series so reopening an older historical
+ * occurrence never creates a second projected future chain.
+ */
 export function virtualOccurrencesForDate(tasks: Task[], targetDate: string): VirtualRecurrenceOccurrence[] {
-  const output: VirtualRecurrenceOccurrence[] = [];
+  const canonicalBySeries = new Map<string, Task>();
   for (const task of tasks) {
     const rule = task.recurrence;
-    if (!rule?.enabled || task.status === "done" || !task.startDate) continue;
-    if ((rule.excludedDates ?? []).includes(targetDate)) continue;
+    if (!rule?.enabled || !task.startDate) continue;
     const seriesKey = task.recurrenceSeriesId ?? task.id;
-    const startDay = parseDate(task.startDate);
+    const current = canonicalBySeries.get(seriesKey);
+    if (!current) {
+      canonicalBySeries.set(seriesKey, task);
+      continue;
+    }
+    const taskOccurrence = task.recurrenceOccurrence ?? 1;
+    const currentOccurrence = current.recurrenceOccurrence ?? 1;
+    const taskRank = `${String(taskOccurrence).padStart(9,"0")}:${task.startDate}:${task.startTime ?? ""}:${task.updatedAt}`;
+    const currentRank = `${String(currentOccurrence).padStart(9,"0")}:${current.startDate}:${current.startTime ?? ""}:${current.updatedAt}`;
+    if (taskRank > currentRank) canonicalBySeries.set(seriesKey, task);
+  }
+
+  const deduped = new Map<string, VirtualRecurrenceOccurrence>();
+  for (const [seriesKey, task] of canonicalBySeries) {
+    const rule = task.recurrence!;
+    // A completed canonical row only projects if a later active occurrence exists.
+    // If the series ended, there is intentionally nothing left to project.
+    if (task.status === "done") continue;
+    if ((rule.excludedDates ?? []).includes(targetDate)) continue;
+    const startDay = parseDate(task.startDate!);
     const targetDay = parseDate(targetDate);
     if (targetDay < startDay) continue;
     if (rule.endMode === "until" && rule.untilDate && targetDate > rule.untilDate) continue;
@@ -192,19 +213,21 @@ export function virtualOccurrencesForDate(tasks: Task[], targetDate: string): Vi
     if (rule.frequency === "minute" || rule.frequency === "hour") {
       const intervalMinutes = Math.max(1,rule.interval) * (rule.frequency === "hour" ? 60 : 1);
       const startAt = timeMinutes(task.startTime);
-      const dayOffset = daysBetween(startDay,targetDay) * 1440;
+      const dayDistance = daysBetween(startDay,targetDay);
+      const dayOffset = dayDistance * 1440;
       let firstIndex = Math.ceil((dayOffset - startAt) / intervalMinutes);
       firstIndex = Math.max(0, firstIndex);
       for (let index=firstIndex; index<firstIndex+2000; index++) {
         const total = startAt + index*intervalMinutes;
         const occurrenceDay = Math.floor(total/1440);
-        if (occurrenceDay > daysBetween(startDay,targetDay)) break;
-        if (occurrenceDay < daysBetween(startDay,targetDay)) continue;
+        if (occurrenceDay > dayDistance) break;
+        if (occurrenceDay < dayDistance) continue;
         const minuteOfDay = ((total%1440)+1440)%1440;
         const occurrenceNumber = (task.recurrenceOccurrence ?? 1) + index;
         if (rule.endMode === "count" && rule.count != null && occurrenceNumber > rule.count) break;
         if (targetDate === task.startDate && minuteOfDay === startAt) continue;
-        output.push({ key:`virtual:${seriesKey}:${targetDate}:${minuteOfDay}`, sourceTaskId:task.id, title:task.title, startTime:minutesTime(minuteOfDay), estimatedMinutes:task.estimatedMinutes, priority:task.priority });
+        const key=`virtual:${seriesKey}:${targetDate}:${minutesTime(minuteOfDay)}`;
+        deduped.set(key,{ key, sourceTaskId:task.id, title:task.title, startTime:minutesTime(minuteOfDay), estimatedMinutes:task.estimatedMinutes, priority:task.priority });
       }
       continue;
     }
@@ -212,14 +235,17 @@ export function virtualOccurrencesForDate(tasks: Task[], targetDate: string): Vi
     if (targetDate === task.startDate || !occursOnDate(task,targetDate)) continue;
     if (rule.endMode === "count" && rule.count != null) {
       let count = task.recurrenceOccurrence ?? 1;
-      const cursor = parseDate(task.startDate);
+      const cursor = parseDate(task.startDate!);
       while (dateOnly(cursor) < targetDate && count <= rule.count) {
         cursor.setDate(cursor.getDate()+1);
         if (occursOnDate(task,dateOnly(cursor),count+1)) count++;
       }
       if (count > rule.count) continue;
     }
-    output.push({ key:`virtual:${seriesKey}:${targetDate}`, sourceTaskId:task.id, title:task.title, startTime:task.startTime, estimatedMinutes:task.estimatedMinutes, priority:task.priority });
+    const occurrenceTime = task.startTime ?? "day";
+    const key=`virtual:${seriesKey}:${targetDate}:${occurrenceTime}`;
+    deduped.set(key,{ key, sourceTaskId:task.id, title:task.title, startTime:task.startTime, estimatedMinutes:task.estimatedMinutes, priority:task.priority });
   }
-  return output.slice(0,1500);
+  return [...deduped.values()].slice(0,1500);
 }
+

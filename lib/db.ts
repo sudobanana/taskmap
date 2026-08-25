@@ -189,6 +189,28 @@ export class TaskMapDB extends Dexie {
           if (task.projectId === qaProject.id && task.priority === "urgent") await taskTable.update(task.id, { priority: "normal" });
         }
       });
+
+    // V9 preserves QA progress and demotes the previous rebuild's urgent checks.
+    this.version(9)
+      .stores({
+        tasks: "id, projectId, parentTaskId, startDate, dueDate, priority, status, manualOrder, createdAt, updatedAt, deletedAt, recurrenceSeriesId",
+        projects: "id, name, createdAt, updatedAt",
+        taskCategories: "id, name, createdAt, updatedAt",
+        taskLayouts: "taskId, updatedAt",
+        transactions: "id, entityId, entityType, clientTimestamp, syncStatus",
+        transactionChanges: "id, transactionId, fieldName",
+        devBacklog: "id, kind, status, createdAt, updatedAt",
+        taskTemplates: "id, name, createdAt, updatedAt",
+      })
+      .upgrade(async tx => {
+        const taskTable = tx.table("tasks");
+        const projectTable = tx.table("projects");
+        const qaProject = (await projectTable.toArray() as Project[]).find(project => project.name === "TaskMap QA Checklist");
+        if (!qaProject) return;
+        for (const task of await taskTable.toArray() as Task[]) {
+          if (task.projectId === qaProject.id && task.priority === "urgent") await taskTable.update(task.id, { priority: "normal" });
+        }
+      });
   }
 }
 
