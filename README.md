@@ -1,10 +1,11 @@
-# TaskMap v1.3.2
+# TaskMap v1.3.3
 
 TaskMap is a local-first task planner built with Next.js, React, TypeScript, Dexie/IndexedDB, React Flow, Supabase, and an optional OpenAI-powered **Ask TaskMap** assistant.
 
-## v1.3.2 build fix
+## v1.3.3 build fix
 
-- Fixed the Dexie multi-table workspace-clone transaction to use the array form supported by Dexie's TypeScript overloads.
+- Excluded `supabase/functions/**` from the Next.js TypeScript build. Supabase Edge Functions run in the Deno-based Supabase Edge Runtime and use `npm:` / `jsr:` specifiers that Next.js should not type-check.
+- Normalized the checked-in Edge Function imports to the official lowercase `@supabase/*` package names.
 - No Sync Workspace behavior changed.
 
 ## New in v1.3 — Sync Workspaces
