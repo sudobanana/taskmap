@@ -91,3 +91,30 @@ The Mind Map is a view over the same `parentTaskId` hierarchy used by Tasks and 
 - Dropping an available task directly on a node updates the dropped task's `parentTaskId` through the normal task transaction service.
 
 Task-list drag behavior uses a dedicated native drag handle. Row centers remain hierarchy drop targets in every sort mode, while before/after reordering is enabled only in Manual sort. This keeps parent assignment available without making non-manual sorts pretend they have a persistent visual order.
+
+## v1.2 online sync
+- IndexedDB remains the immediate source of truth for UI writes.
+- Supabase Auth identifies the cloud account; RLS restricts all sync rows to `auth.uid()`.
+- Local pending transactions are pushed through `apply_taskmap_transaction`.
+- The RPC records immutable transactions and transaction changes, then merges each changed field using original client timestamps plus a deterministic transaction-id tie-breaker.
+- `sync_entities` stores merged JSON snapshots, so future TaskMap fields do not require a schema migration just to sync.
+- Supabase Realtime notifies other online devices; those devices pull the merged snapshots back into IndexedDB.
+- Offline devices accumulate pending transactions and sync after reconnect.
+- The first device linked to an empty cloud bootstraps current entity snapshots and per-field baselines. Existing local history remains local; all transactions after cloud linking are mirrored and available across devices.
+
+## v1.3 Sync Workspaces
+
+TaskMap v1.3 replaces mandatory Supabase Auth for normal sync with explicit, key-based Sync Workspaces.
+
+- Local Only remains the default and creates no cloud credential.
+- A created workspace receives an opaque UUID plus a 256-bit random secret. The portable key is formatted `TM1.<key-id>.<secret>`.
+- The key ID is only a lookup identifier. Supabase stores SHA-256 of the high-entropy secret, never the plaintext secret.
+- `sync_workspaces` stores workspace metadata and hashed/verified recovery-email metadata.
+- `sync_workspace_keys` supports future owner/editor/viewer keys and revocation. v1.3 creates owner keys.
+- `workspace_sync_entities`, `workspace_transactions`, `workspace_transaction_changes`, and `workspace_entity_field_versions` preserve the same materialized-state + immutable transaction + per-field merge model from v1.2, but scope every row by workspace rather than `auth.uid()`.
+- Workspace tables are RLS-protected with explicit deny-all browser policies. `anon` and `authenticated` grants are revoked. Only the Edge Function's service role can access them.
+- The `taskmap-workspace` Edge Function has platform JWT verification disabled because it implements custom Sync Key authentication. Recovery actions separately validate a short-lived Supabase Auth email session.
+- Each local workspace uses a distinct IndexedDB database name (`TaskMapDB.workspace.<workspace-id>`). Switching workspaces persists the selected ID then reloads so all existing Dexie/live-query code binds to the selected database cleanly.
+- Creating a workspace can clone the currently active IndexedDB database. Joining an existing workspace starts from an isolated local database and pulls the remote projection.
+- Devices sync after local writes, on reconnect/focus, and periodically while visible. This avoids requiring an authenticated Realtime subscription for key-only workspaces.
+- Recovery email is optional. Its normalized SHA-256 hash is stored server-side; the plaintext address is not needed for workspace lookup. Verification/recovery uses a Supabase magic-link session and can mint a replacement workspace key.

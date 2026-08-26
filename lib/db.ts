@@ -1,5 +1,6 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { DevBacklogItem, Project, Task, TaskCategory, TaskLayout, TaskTemplate, Transaction, TransactionChange } from "./types";
+import { workspaceDatabaseName } from "./workspace-storage";
 
 export class TaskMapDB extends Dexie {
   tasks!: EntityTable<Task, "id">;
@@ -11,8 +12,8 @@ export class TaskMapDB extends Dexie {
   devBacklog!: EntityTable<DevBacklogItem, "id">;
   taskTemplates!: EntityTable<TaskTemplate, "id">;
 
-  constructor() {
-    super("TaskMapDB");
+  constructor(databaseName = workspaceDatabaseName()) {
+    super(databaseName);
     this.version(1).stores({
       tasks: "id, projectId, parentTaskId, startDate, dueDate, priority, status, updatedAt, deletedAt",
       taskLayouts: "taskId, updatedAt",
@@ -228,7 +229,55 @@ export class TaskMapDB extends Dexie {
       .upgrade(async tx => {
         await tx.table("taskLayouts").clear();
       });
+
+    // V11 / TaskMap v1.2: online-sync release. Preserve all user data and QA progress,
+    // but demote prior urgent QA checks so only the newest sync/parser validation remains urgent.
+    this.version(11)
+      .stores({
+        tasks: "id, projectId, parentTaskId, startDate, dueDate, priority, status, manualOrder, createdAt, updatedAt, deletedAt, recurrenceSeriesId",
+        projects: "id, name, createdAt, updatedAt",
+        taskCategories: "id, name, createdAt, updatedAt",
+        taskLayouts: "taskId, updatedAt",
+        transactions: "id, entityId, entityType, clientTimestamp, syncStatus",
+        transactionChanges: "id, transactionId, fieldName",
+        devBacklog: "id, kind, status, createdAt, updatedAt",
+        taskTemplates: "id, name, createdAt, updatedAt",
+      })
+      .upgrade(async tx => {
+        const taskTable = tx.table("tasks");
+        const projectTable = tx.table("projects");
+        const qaProject = (await projectTable.toArray() as Project[]).find(project => project.name === "TaskMap QA Checklist");
+        if (!qaProject) return;
+        for (const task of await taskTable.toArray() as Task[]) {
+          if (task.projectId === qaProject.id && task.priority === "urgent") await taskTable.update(task.id, { priority: "normal" });
+        }
+      });
   }
 }
 
 export const db = new TaskMapDB();
+
+export async function cloneActiveDatabaseToWorkspace(workspaceId: string) {
+  const target = new TaskMapDB(workspaceDatabaseName(workspaceId));
+  await target.open();
+  const [tasks, projects, categories, layouts, transactions, changes, backlog, templates] = await Promise.all([
+    db.tasks.toArray(), db.projects.toArray(), db.taskCategories.toArray(), db.taskLayouts.toArray(),
+    db.transactions.toArray(), db.transactionChanges.toArray(), db.devBacklog.toArray(), db.taskTemplates.toArray(),
+  ]);
+  await target.transaction("rw", target.tasks, target.projects, target.taskCategories, target.taskLayouts, target.transactions, target.transactionChanges, target.devBacklog, target.taskTemplates, async () => {
+    await Promise.all([target.tasks.clear(), target.projects.clear(), target.taskCategories.clear(), target.taskLayouts.clear(), target.transactions.clear(), target.transactionChanges.clear(), target.devBacklog.clear(), target.taskTemplates.clear()]);
+    if (tasks.length) await target.tasks.bulkPut(tasks);
+    if (projects.length) await target.projects.bulkPut(projects);
+    if (categories.length) await target.taskCategories.bulkPut(categories);
+    if (layouts.length) await target.taskLayouts.bulkPut(layouts);
+    if (transactions.length) await target.transactions.bulkPut(transactions);
+    if (changes.length) await target.transactionChanges.bulkPut(changes);
+    if (backlog.length) await target.devBacklog.bulkPut(backlog);
+    if (templates.length) await target.taskTemplates.bulkPut(templates);
+  });
+  target.close();
+}
+
+export async function clearWorkspaceDatabase(workspaceId: string) {
+  await Dexie.delete(workspaceDatabaseName(workspaceId));
+}

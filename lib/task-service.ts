@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { getDeviceId } from "./device";
+import { shouldDelayQaSeed } from "./workspace-storage";
 import type { DevBacklogItem, DevBacklogKind, Project, Task, TaskCategory, TaskLayout, TaskTemplate, TaskTemplateNode } from "./types";
 import { localDateOnly } from "./format";
 import { nextOccurrence } from "./recurrence";
@@ -710,6 +711,7 @@ export async function useTaskTemplate(templateId: string, options?: { projectId?
 }
 
 export async function seedQaChecklist() {
+  if (shouldDelayQaSeed()) return;
   const today = localDateOnly();
 
   const checklist: Array<Partial<Task> & Pick<Task, "title">> = [
@@ -1103,13 +1105,34 @@ export async function seedQaChecklist() {
     { title: "TaskMap PWA respects mobile safe areas and standalone layout", notes: "Install/open TaskMap as a PWA or emulate standalone display. Confirm the bottom nav, full-screen Task Details, sheets, and app content avoid device notches/home indicators and the TaskMap icon/manifest remain correct.", priority: "normal" },
 
     // v1.1.1: mobile bug-fix / recovery / Quick Add release. Only these new checks are urgent.
-    { title: "Mobile task pills filter without opening Task Details", notes: "On a phone tap Parent, Project, and Tag pills on task cards. Confirm each changes only the corresponding filter and does not open Task Details.", priority: "urgent" },
-    { title: "Deleted tasks stay deleted after refresh", notes: "Delete a normal task and a QA checklist task, refresh/restart TaskMap, and confirm neither is recreated or returned to active views.", priority: "urgent" },
-    { title: "Settings Trash restores and permanently deletes tasks", notes: "Delete tasks, open Settings → Trash, restore one task, restore a hierarchy, bulk restore selected tasks, and permanently delete a task. Confirm permanently deleted tasks disappear from Trash.", priority: "urgent" },
-    { title: "Mobile More can create a new project", notes: "On a phone open More → Projects, create a new project, and confirm TaskMap opens the new project and it is immediately available to tasks.", priority: "urgent" },
-    { title: "Quick Add creates inline parent child hierarchies", notes: "Create `Cheese Types > Swiss, Parm, Cheddar` and confirm one parent with three sibling children. Then create `Cheese Types > Swiss > Parmesan > Cheddar` and confirm a four-level chain.", priority: "urgent" },
-    { title: "Quick Add can move back up hierarchy levels", notes: "Create `Dinner > Main > Steak << Dessert > Cake, Ice Cream` and confirm Main/Steak and Dessert/Cake/Ice Cream form the intended sibling branches. Verify < moves up one level and << moves up two.", priority: "urgent" },
-    { title: "Template Quick Add keeps current focus", notes: "While editing a template, select an existing template task and add one or more new tasks. Confirm the new tasks are created under the current context without automatically focusing the newly created row.", priority: "urgent" },
+    { title: "Mobile task pills filter without opening Task Details", notes: "On a phone tap Parent, Project, and Tag pills on task cards. Confirm each changes only the corresponding filter and does not open Task Details.", priority: "normal" },
+    { title: "Deleted tasks stay deleted after refresh", notes: "Delete a normal task and a QA checklist task, refresh/restart TaskMap, and confirm neither is recreated or returned to active views.", priority: "normal" },
+    { title: "Settings Trash restores and permanently deletes tasks", notes: "Delete tasks, open Settings → Trash, restore one task, restore a hierarchy, bulk restore selected tasks, and permanently delete a task. Confirm permanently deleted tasks disappear from Trash.", priority: "normal" },
+    { title: "Mobile More can create a new project", notes: "On a phone open More → Projects, create a new project, and confirm TaskMap opens the new project and it is immediately available to tasks.", priority: "normal" },
+    { title: "Quick Add creates inline parent child hierarchies", notes: "Create `Cheese Types > Swiss, Parm, Cheddar` and confirm one parent with three sibling children. Then create `Cheese Types > Swiss > Parmesan > Cheddar` and confirm a four-level chain.", priority: "normal" },
+    { title: "Quick Add can move back up hierarchy levels", notes: "Create `Dinner > Main > Steak << Dessert > Cake, Ice Cream` and confirm Main/Steak and Dessert/Cake/Ice Cream form the intended sibling branches. Verify < moves up one level and << moves up two.", priority: "normal" },
+    { title: "Template Quick Add keeps current focus", notes: "While editing a template, select an existing template task and add one or more new tasks. Confirm the new tasks are created under the current context without automatically focusing the newly created row.", priority: "normal" },
+
+    // v1.2 account-sync checks are retained as historical QA, but v1.3 replaces account sync with Sync Workspaces.
+    { title: "Online Sync account signs in without disabling local mode", notes: "Historical v1.2 account-sync check. v1.3 replaces this flow with opt-in Sync Workspaces.", priority: "normal" },
+    { title: "First cloud sync uploads current local TaskMap", notes: "Historical v1.2 account-sync check. Validate equivalent behavior through a newly created Sync Workspace in v1.3.", priority: "normal" },
+    { title: "Second device pulls cloud state without duplicating QA", notes: "Historical v1.2 account-sync check. Validate equivalent behavior by joining the same Sync Key in v1.3.", priority: "normal" },
+    { title: "Offline edits sync after reconnect", notes: "Disconnect a synced workspace, edit several fields, reconnect, and confirm queued changes upload.", priority: "normal" },
+    { title: "Concurrent field edits merge independently", notes: "With two devices offline in the same workspace, change different fields and then the same field; confirm per-field merge semantics remain correct.", priority: "normal" },
+    { title: "Cloud Realtime pulls changes from another device", notes: "Historical wording. v1.3 uses foreground/interval sync rather than authenticated Realtime subscriptions; confirm changes arrive automatically within the sync interval.", priority: "normal" },
+    { title: "Cloud sync preserves transaction history", notes: "Make edits on device A, sync, then open the same task history on device B and confirm synced transactions are present.", priority: "normal" },
+    { title: "Quick Add less-than operators move up real levels", notes: "Create `Dinner > Main > Steak < Dessert` and confirm Dessert is a sibling of Main. Create `Dinner > Main > Steak << Grocery Shopping` and confirm Grocery Shopping is a top-level sibling of Dinner. Commas remain same-level siblings.", priority: "normal" },
+
+    // v1.3: Sync Workspace release. Only these new checks are Urgent.
+    { title: "Cloud Sync remains off until a Sync Workspace is created", notes: "Fresh/local-only TaskMap should not create cloud credentials automatically. Open Settings → Online Sync and confirm Local Only remains active until Create Sync Workspace or Connect Existing Key is explicitly used.", priority: "urgent" },
+    { title: "Create a named Sync Workspace from current TaskMap", notes: "Create a workspace such as Personal and choose Use current TaskMap data. Confirm a TM1 Sync Key is shown once, the workspace becomes active, and the current tasks upload without changing the Local Only database.", priority: "urgent" },
+    { title: "Create an empty named Sync Workspace", notes: "Create a workspace such as Work and choose Start empty. Confirm it receives an isolated local database and does not inherit Personal/Local Only tasks except development QA created in that workspace.", priority: "urgent" },
+    { title: "Connect an existing Sync Key on another device", notes: "Paste the same TM1 Sync Key on another browser/device. Confirm the workspace name is discovered, data pulls into an isolated IndexedDB database, and no traditional account is required.", priority: "urgent" },
+    { title: "Switch between Local Only and multiple Sync Workspaces", notes: "Create/connect at least Personal and Work. Switch among Local Only, Personal, and Work and confirm each reloads its own task/project/template data with no cross-workspace bleed.", priority: "urgent" },
+    { title: "Workspace sync merges offline edits by original field timestamp", notes: "With two devices in one Sync Workspace offline, edit different fields and then the same field. Reconnect and confirm independent fields merge and the later original client edit wins for a conflict.", priority: "urgent" },
+    { title: "Optional recovery email can be added and verified", notes: "Add a recovery email to an owner workspace. Confirm it is shown as unverified until the Supabase recovery link is completed, then the workspace shows a verified recovery-email hint.", priority: "urgent" },
+    { title: "Recovery email can generate a replacement Sync Key", notes: "Use Recover Workspace with a verified recovery email, select the matching workspace, generate a new Sync Key, connect it, and confirm existing workspace data is accessible without the lost key.", priority: "urgent" },
+    { title: "Rotate a Sync Key without storing plaintext server-side", notes: "Rotate the active owner key. Confirm the old key stops connecting, the new key works, and Supabase stores only a key hash rather than the plaintext TM1 key.", priority: "urgent" },
   ];
 
   // Seed atomically. V5 preserves existing QA progress and only adds checklist entries that do not already exist.

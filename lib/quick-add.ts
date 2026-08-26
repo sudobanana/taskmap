@@ -47,8 +47,9 @@ export function parseQuickAddHierarchy(input: string): QuickAddPlanNode[] {
       for (let step = 0; step < pendingOperator.length && ancestor !== null; step += 1) {
         ancestor = parentOf(ancestor);
       }
-      // If we climbed beyond this expression's root, create at the context/root level.
-      parentIndex = ancestor;
+      // Climb to the ancestor at the requested level, then create a sibling of it.
+      // Example: Dinner > Main > Steak < Dessert => Dessert is a sibling of Main.
+      parentIndex = parentOf(ancestor);
     } else {
       parentIndex = parentOf(currentIndex);
     }

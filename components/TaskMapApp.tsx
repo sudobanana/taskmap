@@ -55,6 +55,8 @@ import TemplatesView from "./TemplatesView";
 import { defaultRecurrenceRule, nextOccurrence, recurrenceLabel } from "@/lib/recurrence";
 import { APP_VERSION } from "@/lib/app-meta";
 import { parseQuickAddHierarchy } from "@/lib/quick-add";
+import SyncSettings from "./SyncSettings";
+import { useCloudSync } from "./CloudSyncProvider";
 
 const nav = [
   ["home", "Home", Home],
@@ -132,6 +134,7 @@ function hierarchyEntries(tasks: Task[], mode: TaskSortMode): HierarchyEntry[] {
 }
 
 export default function TaskMapApp() {
+  const cloudSync = useCloudSync();
   const [view, setView] = useState<View>("tasks");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
@@ -670,9 +673,9 @@ export default function TaskMapApp() {
         )}
 
         <div className="sidebar-bottom">
-          <div className={online ? "sync-pill" : "sync-pill offline"}>
+          <div className={!online ? "sync-pill offline" : cloudSync.activeWorkspace && cloudSync.status === "error" ? "sync-pill sync-error-pill" : "sync-pill"}>
             {online ? <Wifi size={15} /> : <CloudOff size={15} />}
-            <span>{online ? `${pending} local change${pending === 1 ? "" : "s"}` : `Offline · ${pending} pending`}</span>
+            <span>{!online ? `Offline · ${pending} pending` : cloudSync.activeWorkspace ? cloudSync.status === "syncing" ? `${cloudSync.activeWorkspace.name} syncing · ${pending} pending` : cloudSync.status === "synced" ? `${cloudSync.activeWorkspace.name} synced · ${pending} pending` : cloudSync.status === "error" ? `Sync error · ${pending} pending` : `${cloudSync.activeWorkspace.name} · ${pending} pending` : `Local Only · ${pending} local change${pending === 1 ? "" : "s"}`}</span>
           </div>
           <button className={view === "settings" ? "settings-nav-button active" : "settings-nav-button"} onClick={() => handleNav("settings")}><SettingsIcon size={16}/><span>Settings</span></button>
         </div>
@@ -835,7 +838,7 @@ export default function TaskMapApp() {
           <button onClick={() => { setMobileMenuOpen(false); setAssistantOpen(true); }}><Sparkles size={19}/><span>Ask TaskMap</span></button>
         </div>
         <div className="mobile-sheet-section"><div className="mobile-project-heading"><span>Projects</span><button className="mobile-new-project-button" onClick={() => setShowProjectForm(true)}><Plus size={15}/> New Project</button></div>{showProjectForm&&<div className="mobile-project-create"><input autoFocus value={projectName} onChange={event=>setProjectName(event.target.value)} onKeyDown={event=>{if(event.key==="Enter")void addProject();if(event.key==="Escape")setShowProjectForm(false);}} placeholder="Project name"/><div><button className="primary-button compact" disabled={!projectName.trim()} onClick={()=>void addProject()}>Create</button><button className="ghost-button compact" onClick={()=>{setShowProjectForm(false);setProjectName("");}}>Cancel</button></div></div>}<div className="mobile-project-list"><button className={!selectedProjectId?"active":""} onClick={() => { setMobileMenuOpen(false); openProject(null); }}><span className="project-dot" style={{background:"#9CA3AF"}}/>All projects</button>{projects.map(project=><button key={project.id} className={selectedProjectId===project.id?"active":""} onClick={() => { setMobileMenuOpen(false); openProject(project.id); }}><span className="project-dot" style={{background:project.color}}/><span>{project.name}</span><small>{tasks.filter(task=>task.projectId===project.id&&task.status!=="done").length}</small></button>)}</div></div>
-        <div className={online?"mobile-sync-status":"mobile-sync-status offline"}>{online?<Wifi size={15}/>:<CloudOff size={15}/>}<span>{online?`${pending} local change${pending===1?"":"s"}`:`Offline · ${pending} pending`}</span></div>
+        <div className={online?"mobile-sync-status":"mobile-sync-status offline"}>{online?<Wifi size={15}/>:<CloudOff size={15}/>}<span>{!online?`Offline · ${pending} pending`:cloudSync.activeWorkspace&&cloudSync.status==="syncing"?`${cloudSync.activeWorkspace.name} syncing · ${pending} pending`:cloudSync.activeWorkspace&&cloudSync.status==="synced"?`${cloudSync.activeWorkspace.name} synced · ${pending} pending`:cloudSync.activeWorkspace?`${cloudSync.activeWorkspace.name} · ${pending} pending`:`Local Only · ${pending} local change${pending===1?"":"s"}`}</span></div>
       </section></div>}
 
       {mobileQuickAddOpen && <div className="mobile-sheet-backdrop" onClick={() => setMobileQuickAddOpen(false)}><section className="mobile-quick-add-sheet" onClick={event => event.stopPropagation()} aria-label="Quick add task">
@@ -885,6 +888,7 @@ function SettingsView({ deletedTasks, allTasks, projects }: { deletedTasks: Task
     <div className="page-heading"><div><p className="eyebrow">Application settings</p><h1>Settings</h1><p className="subtitle">Configure TaskMap, recover deleted work, and review build information.</p></div></div>
     <div className="settings-grid">
       <section className="settings-card"><div><SettingsIcon size={18}/><h2>General</h2></div><p>TaskMap settings will live here as app-wide preferences are added.</p><div className="settings-row"><span>Offline-first storage</span><strong>Enabled</strong></div><div className="settings-row"><span>AI environment variable</span><code>OPENAI_API_KEY</code></div></section>
+      <SyncSettings />
       <section className="settings-card about-card"><div><GitBranch size={18}/><h2>About</h2></div><p>TaskMap local-first task planning and mind-map workspace.</p><div className="about-version"><span>Version</span><strong>TaskMap v{APP_VERSION}</strong></div><small>Build version is sourced from one shared application constant.</small></section>
     </div>
     <section className="settings-card trash-card">

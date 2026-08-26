@@ -29,6 +29,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
+if not exist ".env.local" if exist ".env.example" (
+    copy /Y ".env.example" ".env.local" >nul
+)
+
 if not exist "node_modules" (
     echo First launch: installing TaskMap dependencies...
     echo This only needs to happen once.

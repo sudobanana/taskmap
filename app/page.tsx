@@ -1,5 +1,6 @@
 import TaskMapApp from "@/components/TaskMapApp";
+import { CloudSyncProvider } from "@/components/CloudSyncProvider";
 
 export default function Page() {
-  return <TaskMapApp />;
+  return <CloudSyncProvider><TaskMapApp /></CloudSyncProvider>;
 }
