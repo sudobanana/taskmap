@@ -5,6 +5,8 @@ import { useLiveQuery } from "dexie-react-hooks";
 import {
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   Circle,
   CloudOff,
   GitBranch,
@@ -31,8 +33,6 @@ import {
   addDevBacklogItem,
   createProject,
   createTask,
-  createTaskCategory,
-  deleteTaskCategory,
   deleteProject,
   deleteTaskSet,
   moveTaskInList,
@@ -46,8 +46,7 @@ import {
   restoreTaskSet,
   permanentlyDeleteTaskSet,
 } from "@/lib/task-service";
-import { taskMatchesRule, validateRule } from "@/lib/rule-service";
-import type { AssistantAction, Project, RecurrenceRule, Task, TaskCategory, TaskSortMode, TodayFilter } from "@/lib/types";
+import type { AssistantAction, Project, RecurrenceRule, Task, TaskSortMode, TodayFilter } from "@/lib/types";
 import { formatDayHeading, formatDuration, formatTime, localDateOnly } from "@/lib/format";
 import MindMapView from "./views/MindMapView";
 import CalendarView from "./views/CalendarView";
@@ -69,6 +68,7 @@ const nav = [
   ["map", "Map", MapIcon],
   ["calendar", "Calendar", CalendarDays],
   ["tasks", "Tasks", ListTodo],
+  ["kanban", "Kanban", GitBranch],
   ["completed", "Completed", CheckCircle2],
   ["templates", "Templates", FileStack],
 ] as const;
@@ -77,6 +77,8 @@ type View = (typeof nav)[number][0] | "settings";
 type DropMode = "before" | "after" | "nest";
 type HierarchyEntry = { task: Task; depth: number };
 type RecurringTransition = { seriesId: string; completedTaskId: string; nextOccurrenceNumber: number; completedUntil: number; protectUntil: number; badgeUntil: number; nextLabel: string };
+type KanbanBreakout = "status" | "priority" | "project" | "startDate" | "dueDate";
+type KanbanColumn = { value: string; label: string; color?: string };
 
 const priorityRank: Record<Task["priority"], number> = { urgent: 0, high: 1, normal: 2, low: 3 };
 
@@ -137,6 +139,60 @@ function hierarchyEntries(tasks: Task[], mode: TaskSortMode): HierarchyEntry[] {
   return output;
 }
 
+function tasksVisibleWithCollapsedParents(tasks: Task[], collapsedParentIds: Set<string>) {
+  if (!collapsedParentIds.size) return tasks;
+  const ids = new Set(tasks.map(task => task.id));
+  const byId = new Map(tasks.map(task => [task.id, task]));
+  return tasks.filter(task => {
+    const visited = new Set<string>();
+    let parentId = task.parentTaskId;
+    while (parentId && ids.has(parentId) && !visited.has(parentId)) {
+      if (collapsedParentIds.has(parentId)) return false;
+      visited.add(parentId);
+      parentId = byId.get(parentId)?.parentTaskId ?? null;
+    }
+    return true;
+  });
+}
+
+function kanbanValueForTask(task: Task, breakout: KanbanBreakout) {
+  if (breakout === "project") return task.projectId ?? "__none__";
+  if (breakout === "startDate") return task.startDate ?? "__none__";
+  if (breakout === "dueDate") return task.dueDate ?? "__none__";
+  return task[breakout];
+}
+
+function kanbanBreakoutLabel(breakout: KanbanBreakout) {
+  if (breakout === "startDate") return "start date";
+  if (breakout === "dueDate") return "due date";
+  return breakout;
+}
+
+function kanbanColumnsFor(breakout: KanbanBreakout, projects: Project[], tasks: Task[]): KanbanColumn[] {
+  if (breakout === "status") return [
+    { value: "not_started", label: "Not started" },
+    { value: "in_progress", label: "In progress" },
+    { value: "blocked", label: "Blocked" },
+    { value: "done", label: "Done" },
+  ];
+  if (breakout === "priority") return [
+    { value: "urgent", label: "Urgent" },
+    { value: "high", label: "High" },
+    { value: "normal", label: "Normal" },
+    { value: "low", label: "Low" },
+  ];
+  if (breakout === "project") return [
+    { value: "__none__", label: "No project", color: "#9CA3AF" },
+    ...projects.map(project => ({ value: project.id, label: project.name, color: project.color })),
+  ];
+  const field = breakout === "startDate" ? "startDate" : "dueDate";
+  const dates = [...new Set(tasks.map(task => task[field]).filter((value): value is string => Boolean(value)))].sort();
+  return [
+    { value: "__none__", label: breakout === "startDate" ? "No start date" : "No due date", color: "#9CA3AF" },
+    ...dates.map(value => ({ value, label: value })),
+  ];
+}
+
 export default function TaskMapApp() {
   const cloudSync = useCloudSync();
   const [view, setView] = useState<View>("tasks");
@@ -149,17 +205,20 @@ export default function TaskMapApp() {
   const [todayFilter, setTodayFilter] = useState<TodayFilter>(null);
   const [sortMode, setSortMode] = useState<TaskSortMode>("manual");
   const [showCompleted, setShowCompleted] = useState(true);
+  const [kanbanBreakout, setKanbanBreakout] = useState<KanbanBreakout>(() => {
+    if (typeof window === "undefined") return "status";
+    const saved = window.localStorage.getItem("taskmap-kanban-breakout");
+    return saved === "priority" || saved === "project" || saved === "startDate" || saved === "dueDate" ? saved : "status";
+  });
+  const [collapsedParentIds, setCollapsedParentIds] = useState<Set<string>>(new Set());
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<{ targetId: string; mode: DropMode } | null>(null);
   const [showProjectForm, setShowProjectForm] = useState(false);
   const [projectName, setProjectName] = useState("");
-  const [showCategoryForm, setShowCategoryForm] = useState(false);
-  const [categoryName, setCategoryName] = useState("");
-  const [categoryRule, setCategoryRule] = useState('Project = "My Project"');
-  const [categoryError, setCategoryError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [projectDropId, setProjectDropId] = useState<string | null>(null);
+  const [kanbanDropValue, setKanbanDropValue] = useState<string | null>(null);
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [deleteRequest, setDeleteRequest] = useState<{ ids: string[]; source: "single" | "bulk" } | null>(null);
@@ -169,12 +228,11 @@ export default function TaskMapApp() {
   const [recurringTransitions, setRecurringTransitions] = useState<Record<string, RecurringTransition>>({});
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileQuickAddOpen, setMobileQuickAddOpen] = useState(false);
-  const taskPointerDragRef = useRef<{ id: string; targetId: string | null; mode: DropMode | null; projectId: string | null } | null>(null);
+  const taskPointerDragRef = useRef<{ id: string; targetId: string | null; mode: DropMode | null; projectId: string | null; kanbanValue: string | null } | null>(null);
 
   const tasks = useLiveQuery(() => db.tasks.filter(task => !task.deletedAt && !task.purgedAt).toArray(), [], []);
   const deletedTasks = useLiveQuery(() => db.tasks.filter(task => Boolean(task.deletedAt) && !task.purgedAt).toArray(), [], []);
   const projects = useLiveQuery(() => db.projects.orderBy("name").toArray(), [], []);
-  const categories = useLiveQuery(() => db.taskCategories.orderBy("createdAt").toArray(), [], []);
   const pending = useLiveQuery(() => db.transactions.where("syncStatus").equals("pending").count(), [], 0);
 
   useEffect(() => { void seedQaChecklist(); }, []);
@@ -198,6 +256,10 @@ export default function TaskMapApp() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("taskmap-kanban-breakout", kanbanBreakout);
+  }, [kanbanBreakout]);
 
   const selected = tasks.find(task => task.id === selectedId) ?? null;
   const renderNow = Date.now();
@@ -240,8 +302,12 @@ export default function TaskMapApp() {
     });
   }
 
-  const displayEntries = hierarchyEntries(baseVisibleTasks, sortMode);
+  const scopedParentIds = new Set(baseVisibleTasks.filter(task => baseVisibleTasks.some(candidate => candidate.parentTaskId === task.id)).map(task => task.id));
+  const collapsedVisibleTasks = tasksVisibleWithCollapsedParents(baseVisibleTasks, collapsedParentIds);
+  const displayEntries = hierarchyEntries(collapsedVisibleTasks, sortMode);
   const visibleTasks = displayEntries.map(entry => entry.task);
+  const kanbanColumns = kanbanColumnsFor(kanbanBreakout, projects, baseVisibleTasks);
+  const isTaskWorkspaceView = view === "tasks" || view === "kanban";
 
   const scheduledToday = openTodayTasks.filter(task => Boolean(task.startTime));
   const unscheduledToday = openTodayTasks.filter(task => !task.startTime);
@@ -287,39 +353,47 @@ export default function TaskMapApp() {
     setView("tasks");
   }
 
-  async function addCategory() {
-    const error = validateRule(categoryRule);
-    if (error) {
-      setCategoryError(error);
-      return;
-    }
-    if (!categoryName.trim()) {
-      setCategoryError("Enter a category name.");
-      return;
-    }
-    await createTaskCategory(categoryName, categoryRule);
-    setCategoryName("");
-    setCategoryRule('Project = "My Project"');
-    setCategoryError(null);
-    setShowCategoryForm(false);
+  function toggleParentCollapsed(taskId: string) {
+    setCollapsedParentIds(current => {
+      const next = new Set(current);
+      if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
+      return next;
+    });
   }
 
-  async function performTaskDrop(draggedId: string, targetId: string, mode: DropMode) {
-    if (draggedId === targetId) return;
-    if (mode !== "nest" && sortMode !== "manual") return;
+  function collapseAllVisibleParents() {
+    setCollapsedParentIds(current => new Set([...current, ...scopedParentIds]));
+  }
+
+  function expandAllVisibleParents() {
+    setCollapsedParentIds(current => {
+      const next = new Set(current);
+      scopedParentIds.forEach(id => next.delete(id));
+      return next;
+    });
+  }
+
+
+  async function performTaskDrop(draggedId: string, targetId: string, mode: DropMode, reorderPool: Task[] = visibleTasks) {
+    if (draggedId === targetId) return false;
+    if (mode !== "nest" && sortMode !== "manual") return false;
     const dragged = tasks.find(task => task.id === draggedId);
     const target = tasks.find(task => task.id === targetId);
-    if (!dragged || !target) return;
+    if (!dragged || !target) return false;
 
     if (mode === "nest") {
-      if (descendantIds(tasks, dragged.id).has(target.id)) return;
+      if (descendantIds(tasks, dragged.id).has(target.id)) return false;
       await updateTask(dragged.id, { parentTaskId: target.id, projectId: target.projectId ?? dragged.projectId }, "TASK_NESTED");
-    } else {
-      const withoutDragged = visibleTasks.filter(task => task.id !== draggedId);
-      const targetIndex = withoutDragged.findIndex(task => task.id === targetId);
-      const destinationIndex = Math.max(0, targetIndex + (mode === "after" ? 1 : 0));
-      await moveTaskInList(dragged.id, visibleTasks, destinationIndex, target.parentTaskId);
+      return true;
     }
+
+    const ordering = reorderPool.some(task => task.id === draggedId) ? reorderPool : [dragged, ...reorderPool];
+    const withoutDragged = ordering.filter(task => task.id !== draggedId);
+    const targetIndex = withoutDragged.findIndex(task => task.id === targetId);
+    if (targetIndex < 0) return false;
+    const destinationIndex = Math.max(0, targetIndex + (mode === "after" ? 1 : 0));
+    await moveTaskInList(dragged.id, ordering, destinationIndex, target.parentTaskId);
+    return true;
   }
 
   async function handleDrop(targetId: string, mode: DropMode) {
@@ -330,10 +404,11 @@ export default function TaskMapApp() {
   }
 
   function beginTaskPointerDrag(taskId: string) {
-    taskPointerDragRef.current = { id: taskId, targetId: null, mode: null, projectId: null };
+    taskPointerDragRef.current = { id: taskId, targetId: null, mode: null, projectId: null, kanbanValue: null };
     setDraggingId(taskId);
     setDropIndicator(null);
     setProjectDropId(null);
+    setKanbanDropValue(null);
   }
 
   function updateTaskPointerDrag(taskId: string, clientX: number, clientY: number) {
@@ -344,12 +419,19 @@ export default function TaskMapApp() {
     if (projectEl?.dataset.projectDropId) {
       const projectId = projectEl.dataset.projectDropId;
       active.projectId = projectId;
+      active.kanbanValue = null;
       active.targetId = null;
       active.mode = null;
       setProjectDropId(projectId);
+      setKanbanDropValue(null);
       setDropIndicator(null);
       return;
     }
+
+    const columnEl = elements.map(element => element.closest<HTMLElement>("[data-kanban-drop-value]")).find(Boolean) ?? null;
+    const columnValue = columnEl?.dataset.kanbanDropValue ?? null;
+    active.kanbanValue = columnValue;
+    setKanbanDropValue(columnValue);
 
     const rowEl = elements.map(element => element.closest<HTMLElement>("[data-task-row-id]")).find(Boolean) ?? null;
     setProjectDropId(null);
@@ -374,31 +456,25 @@ export default function TaskMapApp() {
     setDraggingId(null);
     setDropIndicator(null);
     setProjectDropId(null);
+    setKanbanDropValue(null);
     if (!active || active.id !== taskId) return;
     if (active.projectId) {
       await requestProjectChange(taskId, active.projectId);
       return;
     }
-    if (active.targetId && active.mode) await performTaskDrop(taskId, active.targetId, active.mode);
-  }
-
-  async function moveBy(taskId: string, delta: number) {
-    if (sortMode !== "manual") return;
-    const index = visibleTasks.findIndex(task => task.id === taskId);
-    if (index < 0) return;
-    const destination = Math.max(0, Math.min(visibleTasks.length - 1, index + delta));
-    if (destination === index) return;
-    const target = visibleTasks[destination];
-    const without = visibleTasks.filter(task => task.id !== taskId);
-    const targetIndex = without.findIndex(task => task.id === target.id);
-    await moveTaskInList(taskId, visibleTasks, Math.max(0, targetIndex + (delta > 0 ? 1 : 0)), target.parentTaskId);
+    if (active.targetId && active.mode) {
+      const applied = await performTaskDrop(taskId, active.targetId, active.mode);
+      if (view === "kanban" && active.kanbanValue && applied) await applyKanbanBreakout(taskId, active.kanbanValue);
+      return;
+    }
+    if (view === "kanban" && active.kanbanValue) await applyKanbanBreakout(taskId, active.kanbanValue);
   }
 
   function openProject(projectId: string | null) {
     setFocusedParentId(null);
     setSelectedTagFilter(null);
     setSelectedProjectId(projectId);
-    setView("tasks");
+    setView(view === "kanban" ? "kanban" : "tasks");
     setSelectedId(null);
   }
 
@@ -406,7 +482,7 @@ export default function TaskMapApp() {
     setSelectedProjectId(null);
     setSelectedTagFilter(null);
     setFocusedParentId(parentId);
-    setView("tasks");
+    setView(view === "kanban" ? "kanban" : "tasks");
     setSelectedId(parentId);
   }
 
@@ -416,7 +492,7 @@ export default function TaskMapApp() {
     setSelectedProjectId(null);
     setFocusedParentId(null);
     setSelectedTagFilter(normalized);
-    setView("tasks");
+    setView(view === "kanban" ? "kanban" : "tasks");
     setSelectedId(keepTaskId);
   }
 
@@ -427,7 +503,7 @@ export default function TaskMapApp() {
     setSelectedId(null);
     setBulkMode(false);
     setBulkSelected(new Set());
-    if (id === "tasks" || id === "inbox") {
+    if (id === "tasks" || id === "kanban" || id === "inbox") {
       setSelectedProjectId(null);
       setFocusedParentId(null);
       setSelectedTagFilter(null);
@@ -454,6 +530,67 @@ export default function TaskMapApp() {
     await requestProjectChange(task.id, projectId);
   }
 
+  async function applyKanbanBreakout(taskId: string, columnValue: string) {
+    const task = tasks.find(candidate => candidate.id === taskId);
+    if (!task) return;
+    if (kanbanBreakout === "status") {
+      if (!(columnValue === "not_started" || columnValue === "in_progress" || columnValue === "blocked" || columnValue === "done")) return;
+      const nextStatus = columnValue as Task["status"];
+      if (task.status === nextStatus) return;
+      if (nextStatus === "done") {
+        await handleToggleTask(task);
+        return;
+      }
+      if (task.status === "done") {
+        await toggleTaskComplete(task);
+        if (nextStatus !== "not_started") await updateTask(task.id, { status: nextStatus }, "KANBAN_STATUS_CHANGED");
+        return;
+      }
+      await updateTask(task.id, { status: nextStatus }, "KANBAN_STATUS_CHANGED");
+      return;
+    }
+    if (kanbanBreakout === "priority") {
+      if (!(columnValue === "urgent" || columnValue === "high" || columnValue === "normal" || columnValue === "low")) return;
+      const nextPriority = columnValue as Task["priority"];
+      if (task.priority !== nextPriority) await updateTask(task.id, { priority: nextPriority }, "KANBAN_PRIORITY_CHANGED");
+      return;
+    }
+    if (kanbanBreakout === "project") {
+      const nextProjectId = columnValue === "__none__" ? null : columnValue;
+      await requestProjectChange(task.id, nextProjectId);
+      return;
+    }
+    if (kanbanBreakout === "startDate") {
+      const nextDate = columnValue === "__none__" ? null : columnValue;
+      if (task.startDate !== nextDate) await updateTask(task.id, nextDate ? { startDate: nextDate } : { startDate: null, startTime: null }, "KANBAN_START_DATE_CHANGED");
+      return;
+    }
+    const nextDate = columnValue === "__none__" ? null : columnValue;
+    if (task.dueDate !== nextDate) await updateTask(task.id, nextDate ? { dueDate: nextDate } : { dueDate: null, dueTime: null }, "KANBAN_DUE_DATE_CHANGED");
+  }
+
+  async function handleKanbanColumnDrop(columnValue: string, event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const taskId = event.dataTransfer.getData("application/taskmap-task") || event.dataTransfer.getData("text/plain") || draggingId;
+    setDraggingId(null);
+    setDropIndicator(null);
+    setKanbanDropValue(null);
+    if (!taskId) return;
+    await applyKanbanBreakout(taskId, columnValue);
+  }
+
+  async function handleKanbanRowDrop(targetId: string, mode: DropMode, columnValue: string, laneTasks: Task[]) {
+    if (!draggingId) return;
+    const draggedId = draggingId;
+    const ordering = laneTasks.some(task => task.id === draggedId) ? laneTasks : [tasks.find(task => task.id === draggedId), ...laneTasks].filter((task): task is Task => Boolean(task));
+    const applied = await performTaskDrop(draggedId, targetId, mode, ordering);
+    if (applied) await applyKanbanBreakout(draggedId, columnValue);
+    setDraggingId(null);
+    setDropIndicator(null);
+    setKanbanDropValue(null);
+  }
+
   function findTaskByTitle(title: string) {
     const normalized = title.trim().toLowerCase();
     return tasks.find(task => task.title.toLowerCase() === normalized) ?? tasks.find(task => task.title.toLowerCase().includes(normalized));
@@ -466,8 +603,6 @@ export default function TaskMapApp() {
 
   async function executeAssistantAction(action: AssistantAction) {
     if (action.type === "create_project") { await createProject(action.name); return; }
-    if (action.type === "create_category") { await createTaskCategory(action.name, action.rule); return; }
-    if (action.type === "delete_category") { const match = categories.find(category => category.name.toLowerCase() === action.name.toLowerCase()); if (match) await deleteTaskCategory(match.id); return; }
     if (action.type === "remember_backlog") { await addDevBacklogItem(action.title, action.details ?? "", action.kind ?? "feature"); return; }
     if (action.type === "set_view") { handleNav(action.view); return; }
     if (action.type === "set_sort") { setSortMode(action.sort); return; }
@@ -608,28 +743,32 @@ export default function TaskMapApp() {
     ? "Today"
     : view === "completed"
       ? "Completed"
-      : view === "tasks" && focusedParent
+      : isTaskWorkspaceView && focusedParent
         ? focusedParent.title
-        : view === "tasks" && selectedTagFilter
+        : isTaskWorkspaceView && selectedTagFilter
           ? `#${selectedTagFilter}`
-          : view === "tasks" && selectedProject
+          : isTaskWorkspaceView && selectedProject
             ? selectedProject.name
-            : view[0].toUpperCase() + view.slice(1);
+            : view === "kanban"
+              ? "Kanban"
+              : view[0].toUpperCase() + view.slice(1);
 
   const pageSubtitle = view === "today"
     ? `${todayTasks.length} tasks · ${formatDuration(workload) || "No estimated time"} planned`
     : view === "completed"
       ? `${visibleTasks.length} completed task${visibleTasks.length === 1 ? "" : "s"}`
-      : focusedParent
-        ? `Parent task + ${Math.max(0, visibleTasks.length - 1)} subtask${visibleTasks.length === 2 ? "" : "s"}`
-        : selectedTagFilter
-          ? `${visibleTasks.length} task${visibleTasks.length === 1 ? "" : "s"} tagged ${selectedTagFilter}`
-          : `${visibleTasks.length} task${visibleTasks.length === 1 ? "" : "s"}`;
+      : view === "kanban"
+        ? `${visibleTasks.length} visible task${visibleTasks.length === 1 ? "" : "s"} · breakout by ${kanbanBreakoutLabel(kanbanBreakout)}`
+        : focusedParent
+          ? `Parent task + ${Math.max(0, visibleTasks.length - 1)} visible subtask${visibleTasks.length === 2 ? "" : "s"}`
+          : selectedTagFilter
+            ? `${visibleTasks.length} task${visibleTasks.length === 1 ? "" : "s"} tagged ${selectedTagFilter}`
+            : `${visibleTasks.length} task${visibleTasks.length === 1 ? "" : "s"}`;
 
   const breadcrumbItems = useMemo(() => {
     const items: Array<{ label: string; action?: () => void }> = [{ label: "TaskMap", action: () => handleNav("tasks") }];
-    if (view === "tasks") {
-      items.push({ label: "Tasks", action: () => handleNav("tasks") });
+    if (view === "tasks" || view === "kanban") {
+      items.push({ label: view === "kanban" ? "Kanban" : "Tasks", action: () => handleNav(view === "kanban" ? "kanban" : "tasks") });
       if (focusedParent) items.push({ label: focusedParent.title, action: () => focusParent(focusedParent.id) });
       else if (selectedTagFilter) items.push({ label: `Tag: ${selectedTagFilter}` });
       else if (selectedProject) items.push({ label: `Project: ${selectedProject.name}`, action: () => openProject(selectedProject.id) });
@@ -711,7 +850,7 @@ export default function TaskMapApp() {
                 <p className="subtitle">{pageSubtitle}</p>
               </div>
               <div className="page-heading-actions">
-                {selectedProject && view === "tasks" && !focusedParent && !selectedTagFilter && <>
+                {selectedProject && isTaskWorkspaceView && !focusedParent && !selectedTagFilter && <>
                   <button className="ghost-button project-manage-button" onClick={() => setProjectRenameRequest(selectedProject)}><Pencil size={14}/> Rename project</button>
                   <button className="danger-button project-manage-button" onClick={() => setProjectDeleteRequest(selectedProject)}><Trash2 size={14}/> Delete project</button>
                 </>}
@@ -719,14 +858,14 @@ export default function TaskMapApp() {
               </div>
             </div>
 
-            {focusedParent && view === "tasks" && (
+            {focusedParent && isTaskWorkspaceView && (
               <div className="active-filter-banner">
                 <span>Showing <strong>{focusedParent.title}</strong> and all subtasks</span>
                 <button onClick={() => { setFocusedParentId(null); setSelectedId(null); }}><X size={15} /> Clear parent filter</button>
               </div>
             )}
 
-            {selectedTagFilter && view === "tasks" && (
+            {selectedTagFilter && isTaskWorkspaceView && (
               <div className="active-filter-banner tag-filter-banner">
                 <span>Showing tasks tagged <strong>{selectedTagFilter}</strong></span>
                 <button onClick={() => { setSelectedTagFilter(null); setSelectedId(null); }}><X size={15} /> Clear tag filter</button>
@@ -742,82 +881,148 @@ export default function TaskMapApp() {
               </div>
             )}
 
-            <div className="task-panel">
-              <div className="task-panel-header task-panel-toolbar">
-                <div><h2>{view === "today" ? "Today’s tasks" : view === "completed" ? "Completed tasks" : "Tasks"}</h2><span>{visibleTasks.filter(task => task.status !== "done").length} open</span></div>
-                <div className="task-toolbar-actions">
-                  {(["tasks","today","inbox","completed"] as View[]).includes(view) && <>{bulkMode ? <><span className="bulk-count">{bulkSelected.size} selected</span><button className="ghost-button compact" disabled={!visibleTasks.length} onClick={toggleSelectAllVisible}>{visibleTasks.length>0&&visibleTasks.every(task=>bulkSelected.has(task.id))?"Clear all":"Select all"}</button><button className="danger-button compact" disabled={!bulkSelected.size} onClick={() => requestDelete([...bulkSelected], "bulk")}><Trash2 size={13}/> Delete</button><button className="ghost-button compact" onClick={() => { setBulkMode(false); setBulkSelected(new Set()); }}>Done</button></> : <button className="ghost-button compact" onClick={() => { setBulkMode(true); setBulkSelected(new Set()); }}>Select</button>}</>}
-                  {view !== "completed" && <label className="compact-toggle"><input type="checkbox" checked={showCompleted} onChange={event => setShowCompleted(event.target.checked)} /> Show completed</label>}
-                  <label className="sort-control">Sort
-                    <select value={sortMode} onChange={event => setSortMode(event.target.value as TaskSortMode)}>
-                      <option value="manual">Manual</option>
-                      <option value="priority">Priority</option>
-                      <option value="due">Due date</option>
-                      <option value="start">Start date/time</option>
-                      <option value="created">Created date</option>
-                      <option value="alphabetical">Alphabetical</option>
-                    </select>
-                  </label>
+            {view === "kanban" ? (
+              <div className="task-panel kanban-panel">
+                <div className="task-panel-header task-panel-toolbar kanban-toolbar">
+                  <div><h2>Kanban</h2><span>{visibleTasks.filter(task => task.status !== "done").length} open</span></div>
+                  <div className="task-toolbar-actions">
+                    {bulkMode ? <><span className="bulk-count">{bulkSelected.size} selected</span><button className="ghost-button compact" disabled={!visibleTasks.length} onClick={toggleSelectAllVisible}>{visibleTasks.length>0&&visibleTasks.every(task=>bulkSelected.has(task.id))?"Clear all":"Select all"}</button><button className="danger-button compact" disabled={!bulkSelected.size} onClick={() => requestDelete([...bulkSelected], "bulk")}><Trash2 size={13}/> Delete</button><button className="ghost-button compact" onClick={() => { setBulkMode(false); setBulkSelected(new Set()); }}>Done</button></> : <button className="ghost-button compact" onClick={() => { setBulkMode(true); setBulkSelected(new Set()); }}>Select</button>}
+                    <label className="compact-toggle"><input type="checkbox" checked={showCompleted} onChange={event => setShowCompleted(event.target.checked)} /> Show completed</label>
+                    {scopedParentIds.size > 0 && <div className="hierarchy-toggle-group"><button className="ghost-button compact" onClick={expandAllVisibleParents}><ChevronDown size={13}/> Expand all</button><button className="ghost-button compact" onClick={collapseAllVisibleParents}><ChevronRight size={13}/> Hide all</button></div>}
+                    <label className="sort-control">Breakout
+                      <select value={kanbanBreakout} onChange={event => setKanbanBreakout(event.target.value as KanbanBreakout)}>
+                        <option value="status">Status</option>
+                        <option value="priority">Priority</option>
+                        <option value="project">Project</option>
+                        <option value="startDate">Start date</option>
+                        <option value="dueDate">Due date</option>
+                      </select>
+                    </label>
+                    <label className="sort-control">Sort
+                      <select value={sortMode} onChange={event => setSortMode(event.target.value as TaskSortMode)}>
+                        <option value="manual">Manual</option>
+                        <option value="priority">Priority</option>
+                        <option value="due">Due date</option>
+                        <option value="start">Start date/time</option>
+                        <option value="created">Created date</option>
+                        <option value="alphabetical">Alphabetical</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                <div className="quick-add"><Plus size={18} /><input id="quick-task" value={quickTitle} onChange={event => setQuickTitle(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addQuickTask(); }} placeholder={focusedParent ? `Add under ${focusedParent.title} — use >, <, << and commas` : "Add tasks — use > for child, < to go up, commas for siblings"} /></div>
+                <div className="kanban-board kanban-workspace-board">
+                  {kanbanColumns.map(column => {
+                    const laneTasks = collapsedVisibleTasks.filter(task => kanbanValueForTask(task, kanbanBreakout) === column.value);
+                    const laneEntries = hierarchyEntries(laneTasks, sortMode);
+                    return <section
+                      key={`${kanbanBreakout}-${column.value}`}
+                      className={`kanban-lane kanban-workspace-lane ${kanbanDropValue === column.value ? "kanban-drop-target" : ""}`}
+                      data-kanban-drop-value={column.value}
+                      onDragOver={event => { event.preventDefault(); setKanbanDropValue(column.value); }}
+                      onDrop={event => void handleKanbanColumnDrop(column.value, event)}
+                    >
+                      <div className="kanban-lane-header"><div><span className="lane-dot" style={{ background: column.color ?? "#5B5BD6" }} /><strong>{column.label}</strong><small>{laneTasks.length}</small></div></div>
+                      <div className="task-list kanban-lane-task-list">
+                        {laneEntries.length === 0 ? <div className="lane-empty">Drop tasks here</div> : laneEntries.map(({ task, depth }) => {
+                          const recurringUi = recurringUiForTask(task);
+                          return <TaskRow
+                            key={task.id}
+                            task={task}
+                            depth={depth}
+                            project={projects.find(project => project.id === task.projectId) ?? null}
+                            parent={task.parentTaskId ? tasks.find(parent => parent.id === task.parentTaskId) ?? null : null}
+                            selected={selectedId === task.id}
+                            onSelect={() => bulkMode ? toggleBulkSelection(task.id) : setSelectedId(task.id)}
+                            bulkMode={bulkMode}
+                            bulkChecked={bulkSelected.has(task.id)}
+                            onBulkToggle={() => toggleBulkSelection(task.id)}
+                            manual={sortMode === "manual"}
+                            hasChildren={scopedParentIds.has(task.id)}
+                            collapsed={collapsedParentIds.has(task.id)}
+                            onToggleCollapse={() => toggleParentCollapsed(task.id)}
+                            dragging={draggingId === task.id}
+                            onDragStart={event => { event.dataTransfer.setData("application/taskmap-task", task.id); event.dataTransfer.setData("text/plain", task.id); setDraggingId(task.id); setDropIndicator(null); setKanbanDropValue(column.value); }}
+                            onDragHover={(targetId, mode) => { setKanbanDropValue(column.value); setDropIndicator({ targetId, mode }); }}
+                            dropMode={dropIndicator?.targetId === task.id ? dropIndicator.mode : null}
+                            onDrop={(targetId, mode) => void handleKanbanRowDrop(targetId, mode, column.value, laneTasks)}
+                            onDragEnd={() => { setDraggingId(null); setDropIndicator(null); setProjectDropId(null); setKanbanDropValue(null); }}
+                            onPointerDragStart={() => beginTaskPointerDrag(task.id)}
+                            onPointerDragMove={(x, y) => updateTaskPointerDrag(task.id, x, y)}
+                            onPointerDragEnd={() => void endTaskPointerDrag(task.id)}
+                            onProjectClick={projectId => openProject(projectId)}
+                            onParentClick={parentId => focusParent(parentId)}
+                            onTagClick={tag => focusTag(tag)}
+                            onToggle={() => void handleToggleTask(task)}
+                            recurringState={recurringUi.state}
+                            checkboxProtected={recurringUi.protected}
+                            nextOccurrenceLabel={recurringUi.nextLabel}
+                          />;
+                        })}
+                      </div>
+                    </section>;
+                  })}
                 </div>
               </div>
-              {view !== "completed" && <div className="quick-add"><Plus size={18} /><input id="quick-task" value={quickTitle} onChange={event => setQuickTitle(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addQuickTask(); }} placeholder={focusedParent ? `Add under ${focusedParent.title} — use >, <, << and commas` : "Add tasks — use > for child, < to go up, commas for siblings"} /></div>}
-              <div className="task-list">
-                {displayEntries.length === 0 ? <div className="empty-state">No tasks match this view.</div> : displayEntries.map(({ task, depth }, index) => {
-                  const recurringUi = recurringUiForTask(task);
-                  return <TaskRow
-                    key={task.id}
-                    task={task}
-                    depth={depth}
-                    project={projects.find(project => project.id === task.projectId) ?? null}
-                    parent={task.parentTaskId ? tasks.find(parent => parent.id === task.parentTaskId) ?? null : null}
-                    selected={selectedId === task.id}
-                    onSelect={() => bulkMode ? toggleBulkSelection(task.id) : setSelectedId(task.id)}
-                    bulkMode={bulkMode}
-                    bulkChecked={bulkSelected.has(task.id)}
-                    onBulkToggle={() => toggleBulkSelection(task.id)}
-                    manual={sortMode === "manual"}
-                    isFirst={index === 0}
-                    isLast={index === displayEntries.length - 1}
-                    onMove={delta => moveBy(task.id, delta)}
-                    dragging={draggingId === task.id}
-                    onDragStart={event => { event.dataTransfer.setData("application/taskmap-task", task.id); event.dataTransfer.setData("text/plain", task.id); setDraggingId(task.id); setDropIndicator(null); }}
-                    onDragHover={(targetId, mode) => setDropIndicator({ targetId, mode })}
-                    dropMode={dropIndicator?.targetId === task.id ? dropIndicator.mode : null}
-                    onDrop={(targetId, mode) => handleDrop(targetId, mode)}
-                    onDragEnd={() => { setDraggingId(null); setDropIndicator(null); setProjectDropId(null); }}
-                    onPointerDragStart={() => beginTaskPointerDrag(task.id)}
-                    onPointerDragMove={(x, y) => updateTaskPointerDrag(task.id, x, y)}
-                    onPointerDragEnd={() => void endTaskPointerDrag(task.id)}
-                    onProjectClick={projectId => openProject(projectId)}
-                    onParentClick={parentId => focusParent(parentId)}
-                    onTagClick={tag => focusTag(tag)}
-                    onToggle={() => void handleToggleTask(task)}
-                    recurringState={recurringUi.state}
-                    checkboxProtected={recurringUi.protected}
-                    nextOccurrenceLabel={recurringUi.nextLabel}
-                  />;
-                })}
+            ) : (
+              <div className="task-panel">
+                <div className="task-panel-header task-panel-toolbar">
+                  <div><h2>{view === "today" ? "Today’s tasks" : view === "completed" ? "Completed tasks" : "Tasks"}</h2><span>{visibleTasks.filter(task => task.status !== "done").length} open</span></div>
+                  <div className="task-toolbar-actions">
+                    {(["tasks","today","inbox","completed"] as View[]).includes(view) && <>{bulkMode ? <><span className="bulk-count">{bulkSelected.size} selected</span><button className="ghost-button compact" disabled={!visibleTasks.length} onClick={toggleSelectAllVisible}>{visibleTasks.length>0&&visibleTasks.every(task=>bulkSelected.has(task.id))?"Clear all":"Select all"}</button><button className="danger-button compact" disabled={!bulkSelected.size} onClick={() => requestDelete([...bulkSelected], "bulk")}><Trash2 size={13}/> Delete</button><button className="ghost-button compact" onClick={() => { setBulkMode(false); setBulkSelected(new Set()); }}>Done</button></> : <button className="ghost-button compact" onClick={() => { setBulkMode(true); setBulkSelected(new Set()); }}>Select</button>}</>}
+                    {view !== "completed" && <label className="compact-toggle"><input type="checkbox" checked={showCompleted} onChange={event => setShowCompleted(event.target.checked)} /> Show completed</label>}
+                    {scopedParentIds.size > 0 && <div className="hierarchy-toggle-group"><button className="ghost-button compact" onClick={expandAllVisibleParents}><ChevronDown size={13}/> Expand all</button><button className="ghost-button compact" onClick={collapseAllVisibleParents}><ChevronRight size={13}/> Hide all</button></div>}
+                    <label className="sort-control">Sort
+                      <select value={sortMode} onChange={event => setSortMode(event.target.value as TaskSortMode)}>
+                        <option value="manual">Manual</option>
+                        <option value="priority">Priority</option>
+                        <option value="due">Due date</option>
+                        <option value="start">Start date/time</option>
+                        <option value="created">Created date</option>
+                        <option value="alphabetical">Alphabetical</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+                {view !== "completed" && <div className="quick-add"><Plus size={18} /><input id="quick-task" value={quickTitle} onChange={event => setQuickTitle(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addQuickTask(); }} placeholder={focusedParent ? `Add under ${focusedParent.title} — use >, <, << and commas` : "Add tasks — use > for child, < to go up, commas for siblings"} /></div>}
+                <div className="task-list">
+                  {displayEntries.length === 0 ? <div className="empty-state">No tasks match this view.</div> : displayEntries.map(({ task, depth }) => {
+                    const recurringUi = recurringUiForTask(task);
+                    return <TaskRow
+                      key={task.id}
+                      task={task}
+                      depth={depth}
+                      project={projects.find(project => project.id === task.projectId) ?? null}
+                      parent={task.parentTaskId ? tasks.find(parent => parent.id === task.parentTaskId) ?? null : null}
+                      selected={selectedId === task.id}
+                      onSelect={() => bulkMode ? toggleBulkSelection(task.id) : setSelectedId(task.id)}
+                      bulkMode={bulkMode}
+                      bulkChecked={bulkSelected.has(task.id)}
+                      onBulkToggle={() => toggleBulkSelection(task.id)}
+                      manual={sortMode === "manual"}
+                      hasChildren={scopedParentIds.has(task.id)}
+                      collapsed={collapsedParentIds.has(task.id)}
+                      onToggleCollapse={() => toggleParentCollapsed(task.id)}
+                      dragging={draggingId === task.id}
+                      onDragStart={event => { event.dataTransfer.setData("application/taskmap-task", task.id); event.dataTransfer.setData("text/plain", task.id); setDraggingId(task.id); setDropIndicator(null); }}
+                      onDragHover={(targetId, mode) => setDropIndicator({ targetId, mode })}
+                      dropMode={dropIndicator?.targetId === task.id ? dropIndicator.mode : null}
+                      onDrop={(targetId, mode) => handleDrop(targetId, mode)}
+                      onDragEnd={() => { setDraggingId(null); setDropIndicator(null); setProjectDropId(null); setKanbanDropValue(null); }}
+                      onPointerDragStart={() => beginTaskPointerDrag(task.id)}
+                      onPointerDragMove={(x, y) => updateTaskPointerDrag(task.id, x, y)}
+                      onPointerDragEnd={() => void endTaskPointerDrag(task.id)}
+                      onProjectClick={projectId => openProject(projectId)}
+                      onParentClick={parentId => focusParent(parentId)}
+                      onTagClick={tag => focusTag(tag)}
+                      onToggle={() => void handleToggleTask(task)}
+                      recurringState={recurringUi.state}
+                      checkboxProtected={recurringUi.protected}
+                      nextOccurrenceLabel={recurringUi.nextLabel}
+                    />;
+                  })}
+                </div>
               </div>
-            </div>
-
-            {view === "tasks" && (
-              <TaskCategoriesSection
-                categories={categories}
-                tasks={normalizedSearch ? baseVisibleTasks : baseScope}
-                projects={projects}
-                showCompleted={showCompleted}
-                selectedId={selectedId}
-                onSelect={setSelectedId}
-                showForm={showCategoryForm}
-                setShowForm={setShowCategoryForm}
-                name={categoryName}
-                setName={setCategoryName}
-                rule={categoryRule}
-                setRule={value => { setCategoryRule(value); setCategoryError(null); }}
-                error={categoryError}
-                onAdd={addCategory}
-                onDelete={deleteTaskCategory}
-              />
             )}
           </section>
         )}
@@ -923,7 +1128,7 @@ function StatFilterCard({ label, value, detail, active, danger = false, onClick 
   return <button className={`stat-card stat-filter ${active ? "active" : ""} ${danger ? "danger" : ""}`} aria-pressed={active} onClick={onClick}><span>{label}</span><strong>{value}</strong><small>{detail}</small></button>;
 }
 
-function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, bulkChecked, onBulkToggle, manual, isFirst, isLast, onMove, dragging, onDragStart, onDragHover, dropMode, onDrop, onDragEnd, onPointerDragStart, onPointerDragMove, onPointerDragEnd, onProjectClick, onParentClick, onTagClick, onToggle, recurringState, checkboxProtected, nextOccurrenceLabel }: {
+function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, bulkChecked, onBulkToggle, manual, hasChildren, collapsed, onToggleCollapse, dragging, onDragStart, onDragHover, dropMode, onDrop, onDragEnd, onPointerDragStart, onPointerDragMove, onPointerDragEnd, onProjectClick, onParentClick, onTagClick, onToggle, recurringState, checkboxProtected, nextOccurrenceLabel }: {
   task: Task;
   depth: number;
   project: Project | null;
@@ -934,9 +1139,9 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
   bulkChecked: boolean;
   onBulkToggle: () => void;
   manual: boolean;
-  isFirst: boolean;
-  isLast: boolean;
-  onMove: (delta: number) => void;
+  hasChildren: boolean;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
   dragging: boolean;
   onDragStart: (event: DragEvent<HTMLSpanElement>) => void;
   onDragHover: (targetId: string, mode: DropMode) => void;
@@ -971,7 +1176,7 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
       style={{ paddingLeft: `${18 + depth * 26}px`, "--mobile-task-indent": `${10 + Math.min(depth, 5) * 14}px` } as CSSProperties}
       onClick={onSelect}
       onDragOver={event => { event.preventDefault(); onDragHover(task.id, manual ? modeFromEvent(event) : "nest"); }}
-      onDrop={event => { event.preventDefault(); onDrop(task.id, manual ? modeFromEvent(event) : "nest"); }}
+      onDrop={event => { event.preventDefault(); event.stopPropagation(); onDrop(task.id, manual ? modeFromEvent(event) : "nest"); }}
     >
       {bulkMode && <label className="bulk-task-check" onClick={event => event.stopPropagation()}><input type="checkbox" checked={bulkChecked} onChange={onBulkToggle} aria-label={`Select ${task.title}`} /></label>}
       <span
@@ -989,6 +1194,7 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
         onDragStart={event => { event.stopPropagation(); event.dataTransfer.effectAllowed = "move"; onDragStart(event); }}
         onDragEnd={event => { event.stopPropagation(); onDragEnd(); }}
       >⋮⋮</span>
+      {hasChildren ? <button className="task-collapse-button" title={collapsed ? "Expand subtasks" : "Collapse subtasks"} aria-label={collapsed ? `Expand subtasks under ${task.title}` : `Collapse subtasks under ${task.title}`} onClick={event => { event.stopPropagation(); onToggleCollapse(); }}>{collapsed ? <ChevronRight size={16}/> : <ChevronDown size={16}/>}</button> : <span className="task-collapse-spacer" aria-hidden="true" />}
       <button className="check-button" disabled={checkboxProtected} title={checkboxProtected ? "Protected briefly so the next recurring occurrence is not completed accidentally" : undefined} aria-label={visuallyDone ? `Reopen ${task.title}` : `Complete ${task.title}`} onClick={event => { event.stopPropagation(); if (!checkboxProtected) onToggle(); }}>{visuallyDone ? <CheckCircle2 size={21} /> : <Circle size={21} />}</button>
       <div className="task-copy">
         <strong className={visuallyDone ? "done" : ""}>{task.title}</strong>
@@ -999,62 +1205,8 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
           {(task.tags ?? []).map((tag, tagIndex) => <button key={`${tag}-${tagIndex}`} className="task-tag label-tag" onPointerDown={event => event.stopPropagation()} onClick={event => { event.preventDefault(); event.stopPropagation(); onTagClick(tag); }}>Tag: {tag}</button>)}
         </div>}
       </div>
-      {manual && <div className="order-buttons"><button disabled={isFirst} title="Move up" onClick={event => { event.stopPropagation(); onMove(-1); }}>↑</button><button disabled={isLast} title="Move down" onClick={event => { event.stopPropagation(); onMove(1); }}>↓</button></div>}
       <span className={`priority ${task.priority}`}>{task.priority === "urgent" ? "!!!" : task.priority === "high" ? "!!" : task.priority === "normal" ? "!" : "–"}</span>
     </div>
-  );
-}
-
-function TaskCategoriesSection({ categories, tasks, projects, showCompleted, selectedId, onSelect, showForm, setShowForm, name, setName, rule, setRule, error, onAdd, onDelete }: {
-  categories: TaskCategory[];
-  tasks: Task[];
-  projects: Project[];
-  showCompleted: boolean;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  showForm: boolean;
-  setShowForm: (value: boolean) => void;
-  name: string;
-  setName: (value: string) => void;
-  rule: string;
-  setRule: (value: string) => void;
-  error: string | null;
-  onAdd: () => void;
-  onDelete: (id: string) => void;
-}) {
-  return (
-    <section className="category-section">
-      <div className="category-heading">
-        <div><p className="eyebrow">Rule-based views</p><h2>Task categories</h2><p>Create Kanban-style lanes with rules such as <code>Project = "My Project"</code> or <code>Due Date = "9/1/2026"</code>.</p></div>
-        <button className="secondary-button" onClick={() => setShowForm(!showForm)}><Plus size={16} /> Add category</button>
-      </div>
-
-      {showForm && (
-        <div className="category-form">
-          <label>Name<input value={name} onChange={event => setName(event.target.value)} placeholder="Due September 1" /></label>
-          <label>Rule<input value={rule} onChange={event => setRule(event.target.value)} placeholder={'Project = "My Project" AND Priority = "urgent"'} /></label>
-          <div className="category-form-footer"><span className={error ? "rule-error" : "rule-help"}>{error ?? "Supported: Project, Due Date, Start Date, Priority, Status, Duration, Completed, Title, Created Date. Join rules with AND."}</span><div><button className="ghost-button" onClick={() => setShowForm(false)}>Cancel</button><button className="primary-button compact" onClick={onAdd}>Create category</button></div></div>
-        </div>
-      )}
-
-      {categories.length === 0 ? <div className="empty-category">No custom categories yet.</div> : (
-        <div className="kanban-board">
-          {categories.map(category => {
-            const matching = tasks.filter(task => (showCompleted || task.status !== "done") && taskMatchesRule(task, category.rule, projects));
-            return (
-              <div className="kanban-lane" key={category.id}>
-                <div className="kanban-lane-header"><div><span className="lane-dot" style={{ background: category.color }} /><strong>{category.name}</strong><small>{matching.length}</small></div><button title="Delete category" onClick={() => onDelete(category.id)}>×</button></div>
-                <code className="lane-rule">{category.rule}</code>
-                <div className="kanban-cards">
-                  {matching.map(task => <button key={task.id} className={selectedId === task.id ? "kanban-task selected" : "kanban-task"} onClick={() => onSelect(task.id)}><span className={task.status === "done" ? "done" : ""}>{task.title}</span><small>{task.dueDate ? `Due ${task.dueDate}` : task.estimatedMinutes ? formatDuration(task.estimatedMinutes) : "No date"}</small></button>)}
-                  {matching.length === 0 && <div className="lane-empty">No matching tasks</div>}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
   );
 }
 

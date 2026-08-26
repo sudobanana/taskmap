@@ -144,8 +144,6 @@ export type AssistantAction =
   | { type: "reopen_task"; taskTitle: string }
   | { type: "delete_task"; taskTitle: string }
   | { type: "create_project"; name: string }
-  | { type: "create_category"; name: string; rule: string }
-  | { type: "delete_category"; name: string }
   | { type: "remember_backlog"; title: string; details?: string; kind?: DevBacklogKind }
   | { type: "filter_project"; projectName: string | null }
   | { type: "focus_parent"; taskTitle: string }
@@ -155,7 +153,7 @@ export type AssistantAction =
   | { type: "set_recurrence"; taskTitle: string; rule: RecurrenceRule | null }
   | { type: "save_task_as_template"; taskTitle: string; templateName?: string }
   | { type: "use_template"; templateName: string; projectName?: string | null }
-  | { type: "set_view"; view: "today" | "inbox" | "map" | "calendar" | "tasks" | "completed" | "templates" };
+  | { type: "set_view"; view: "today" | "inbox" | "map" | "calendar" | "tasks" | "kanban" | "completed" | "templates" };
 
 export type TaskSortMode = "manual" | "priority" | "due" | "start" | "created" | "alphabetical";
 export type TodayFilter = "scheduled" | "unscheduled" | "urgent" | "completed" | null;

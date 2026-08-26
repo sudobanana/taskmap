@@ -13,10 +13,8 @@ Supported actions:
 - {"type":"reopen_task","taskTitle":"..."}
 - {"type":"delete_task","taskTitle":"..."}
 - {"type":"create_project","name":"..."}
-- {"type":"create_category","name":"...","rule":"Project = \\"Name\\" AND Priority = \\"urgent\\""}
-- {"type":"delete_category","name":"..."}
 - {"type":"remember_backlog","title":"...","details":"...","kind":"bug|feature|improvement|idea"}
-- {"type":"set_view","view":"today|inbox|map|calendar|tasks|completed|templates"}
+- {"type":"set_view","view":"today|inbox|map|calendar|tasks|kanban|completed|templates"}
 - {"type":"filter_project","projectName":"name|null"}
 - {"type":"focus_parent","taskTitle":"..."}
 - {"type":"set_sort","sort":"manual|priority|due|start|created|alphabetical"}

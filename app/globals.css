@@ -97,9 +97,6 @@ nav { display: grid; gap: 4px; }
 .task-copy strong { display: block; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .done { text-decoration: line-through; color: #9ca3af !important; }
 .task-meta { display: flex; gap: 10px; flex-wrap: wrap; color: #8a92a0; font-size: 11px; margin-top: 4px; }
-.order-buttons { display: flex; gap: 3px; }
-.order-buttons button { border: 1px solid var(--border); background: #fff; width: 27px; height: 27px; border-radius: 6px; color: #7f8793; cursor: pointer; }
-.order-buttons button:disabled { opacity: .3; cursor: default; }
 .priority { font-size: 11px; font-weight: 900; min-width: 24px; text-align: center; flex: 0 0 auto; }
 .priority.urgent { color: var(--danger); }
 .priority.high { color: #e68a3f; }
@@ -214,7 +211,7 @@ nav { display: grid; gap: 4px; }
   .detail-grid { grid-template-columns: 1fr; }
   .task-panel-header { align-items: flex-start; flex-direction: column; }
   .task-toolbar-actions { width: 100%; justify-content: space-between; }
-  .order-buttons { display: none; }
+  
 }
 
 /* V4 hierarchy, drag/drop, calendar interaction, and map filtering */
@@ -740,7 +737,7 @@ nav { display: grid; gap: 4px; }
   .task-tags::-webkit-scrollbar { display: none; }
   .task-tag { flex: 0 0 auto; min-height: 28px; display: inline-flex; align-items: center; }
   .priority { min-width: 18px; }
-  .order-buttons { display: none !important; }
+  
   .task-row.drop-nest::after { right: 10px; top: 5px; transform: none; }
   .active-filter-banner { margin: 0 0 12px; padding: 9px 10px; }
 
@@ -943,3 +940,40 @@ nav { display: grid; gap: 4px; }
 .project-rename-field input:focus { border-color:#b8bae8; box-shadow:0 0 0 3px rgba(91,91,214,.08); }
 .dialog-error { color:var(--danger) !important; font-weight:700; }
 @media (max-width:800px) { .page-heading-actions { justify-content:flex-start; } .page-heading-actions .primary-button { display:none; } .project-manage-button { flex:1; justify-content:center; } }
+
+
+/* v1.6 Kanban + collapsible task hierarchy */
+.task-collapse-button { width:28px; height:28px; flex:0 0 28px; display:grid; place-items:center; border:0; border-radius:7px; background:transparent; color:#8d94a0; cursor:pointer; }
+.task-collapse-button:hover { background:#f0f0ff; color:var(--primary); }
+.task-collapse-spacer { width:28px; height:28px; flex:0 0 28px; }
+.hierarchy-toggle-group { display:flex; align-items:center; gap:5px; }
+.hierarchy-toggle-group .ghost-button { display:inline-flex; align-items:center; gap:4px; }
+.kanban-panel { overflow:hidden; }
+.kanban-toolbar { align-items:flex-start; }
+.kanban-workspace-board { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(310px, 350px); gap:12px; overflow-x:auto; overscroll-behavior-x:contain; padding:12px; background:#f7f8fb; min-height:340px; }
+.kanban-workspace-lane { min-width:0; padding:0; overflow:hidden; background:#f1f2f7; transition:border-color .12s ease, box-shadow .12s ease, background .12s ease; }
+.kanban-workspace-lane.kanban-drop-target { border-color:rgba(91,91,214,.65); box-shadow:0 0 0 3px rgba(91,91,214,.10); background:#f4f4ff; }
+.kanban-workspace-lane .kanban-lane-header { min-height:47px; padding:11px 12px; border-bottom:1px solid #e2e4eb; background:rgba(255,255,255,.62); }
+.kanban-workspace-lane .kanban-lane-header strong { font-size:13px; }
+.kanban-workspace-lane .kanban-lane-header small { min-width:22px; height:20px; padding:0 6px; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; background:#fff; border:1px solid #e2e4eb; color:#7d8490; font-weight:800; }
+.kanban-lane-task-list { display:grid; gap:7px; padding:9px; background:transparent; }
+.kanban-lane-task-list .task-row { border:1px solid #e0e2e9; border-radius:10px; padding-top:10px; padding-right:10px; padding-bottom:10px; box-shadow:0 2px 6px rgba(31,36,46,.035); }
+.kanban-lane-task-list .task-row:last-child { border-bottom:1px solid #e0e2e9; }
+.kanban-lane-task-list .task-row.drop-before::before, .kanban-lane-task-list .task-row.drop-after::after { left:7px; right:7px; }
+.kanban-lane-task-list .lane-empty { min-height:82px; display:grid; place-items:center; border:1px dashed #d6d9e1; border-radius:9px; background:rgba(255,255,255,.5); }
+.kanban-panel .quick-add { border-bottom:1px solid var(--border); }
+
+@media (max-width: 900px) {
+  .hierarchy-toggle-group { width:100%; order:5; }
+  .hierarchy-toggle-group .ghost-button { flex:1; justify-content:center; }
+  .kanban-workspace-board { grid-auto-columns:minmax(290px, 78vw); }
+}
+
+@media (max-width: 560px) {
+  .task-collapse-button, .task-collapse-spacer { width:32px; height:40px; flex-basis:32px; }
+  .kanban-workspace-board { grid-auto-columns:calc(100vw - 38px); gap:9px; padding:9px; scroll-snap-type:x proximity; }
+  .kanban-workspace-lane { scroll-snap-align:start; }
+  .kanban-lane-task-list { padding:7px; }
+  .kanban-lane-task-list .task-row { padding-right:7px; }
+  .kanban-toolbar .sort-control { margin-left:0; }
+}

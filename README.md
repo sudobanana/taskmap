@@ -1,7 +1,21 @@
-# TaskMap v1.5.0
+# TaskMap v1.6.0
 
 TaskMap is a local-first task manager with optional named cloud Sync Workspaces.
 
+
+
+## New in v1.6 — Kanban + collapsible hierarchy
+
+- The old visible **Rule-based Views / Task categories** section has been removed and replaced with a dedicated **Kanban** item in the main navigation.
+- Kanban uses the same tasks, project/parent/tag filters, search, sorting, completion semantics, and drag hierarchy as Tasks.
+- Breakout selector supports **Status**, **Priority**, and **Project**. Each field value becomes its own column.
+- Dragging a task between columns updates the real breakout field. Moving to/from Done uses TaskMap's normal complete/reopen flow so recurrence and parent completion cascades stay intact.
+- Dragging directly onto a task still nests it; Manual sort still supports before/after reorder inside Kanban.
+- Parent tasks now have per-row expand/collapse controls across task-list views and Kanban.
+- **Expand all** and **Collapse all** controls appear at the top whenever the current view contains parent tasks.
+- Collapsing a parent hides all visible descendants, including descendants that belong to another Kanban column.
+- The old up/down reorder arrow buttons are removed everywhere; manual ordering remains available through the dedicated drag handle.
+- v1.5's project-delete TypeScript inference issue is fixed by typing the generated change list as `TransactionChange[]`, allowing `projectId` to transition to `null`.
 
 ## New in v1.5 — REST GPT Actions + project management
 

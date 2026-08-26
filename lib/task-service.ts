@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { getDeviceId } from "./device";
 import { shouldDelayQaSeed } from "./workspace-storage";
-import type { DevBacklogItem, DevBacklogKind, Project, Task, TaskCategory, TaskLayout, TaskTemplate, TaskTemplateNode } from "./types";
+import type { DevBacklogItem, DevBacklogKind, Project, Task, TaskCategory, TaskLayout, TaskTemplate, TaskTemplateNode, TransactionChange } from "./types";
 import { localDateOnly } from "./format";
 import { nextOccurrence } from "./recurrence";
 
@@ -645,7 +645,7 @@ export async function deleteProject(id: string, taskMode: "detach" | "cascade") 
         await db.tasks.update(before.id, patch);
         const txId = crypto.randomUUID();
         await db.transactions.add({ id:txId, entityType:"task", entityId:before.id, actionType:before.projectId === id ? "TASK_DELETED_WITH_PROJECT" : "TASK_DELETED_WITH_PROJECT_DESCENDANT", groupId, deviceId:getDeviceId(), clientTimestamp:now, serverReceivedTimestamp:null, baseRevision:before.revision, resultRevision:before.revision + 1, syncStatus:"pending" });
-        const changes = [
+        const changes: TransactionChange[] = [
           { id:crypto.randomUUID(), transactionId:txId, fieldName:"deletedAt", oldValue:before.deletedAt, newValue:now },
           { id:crypto.randomUUID(), transactionId:txId, fieldName:"updatedAt", oldValue:before.updatedAt, newValue:now },
           { id:crypto.randomUUID(), transactionId:txId, fieldName:"revision", oldValue:before.revision, newValue:before.revision + 1 },
@@ -951,22 +951,6 @@ export async function seedQaChecklist() {
       notes: "Set this task to Urgent, then open Calendar. It should appear in Day Tasks even without a start time.",
     },
     {
-      title: "Create a custom task category",
-      notes: "On Tasks, add a category such as QA Project with rule Project = \"TaskMap QA Checklist\" and verify matching tasks populate the lane.",
-    },
-    {
-      title: "Create a multi-condition category rule",
-      notes: "Create a category using AND, for example Project = \"TaskMap QA Checklist\" AND Priority = \"urgent\".",
-    },
-    {
-      title: "Validate an invalid category rule",
-      notes: "Enter an unsupported/malformed rule and confirm the category form reports a validation error instead of creating it.",
-    },
-    {
-      title: "Delete a custom task category",
-      notes: "Create a temporary category and use its × action to delete it. Confirm tasks themselves are unaffected.",
-    },
-    {
       title: "Open transaction history",
       notes: "Edit this task, then verify Task Details history shows the action and old → new values.",
     },
@@ -1234,17 +1218,32 @@ export async function seedQaChecklist() {
     { title: "External API exposes a callable OpenAPI description", notes: "Open /api/taskmap?openapi=1 and confirm an OpenAPI 3.1 document describes the callTaskMap POST operation, Bearer TMAPI1 authentication, and supported actions for chatbot/agent integration.", priority: "normal" },
     { title: "Vercel API proxy forwards TaskMap API calls", notes: "From an outside client call the deployed TaskMap domain at /api/taskmap instead of the Supabase URL. Confirm GET metadata and authenticated POST actions proxy successfully with CORS enabled.", priority: "normal" },
 
-    // v1.5: REST GPT Actions + project management. Only these new checks are Urgent.
-    { title: "Project can be renamed from its project view", notes: "Open a project, click Rename project, enter a new name, and confirm the sidebar, breadcrumb, task chips, and synced devices reflect the new name without changing task assignments.", priority: "urgent" },
-    { title: "Project delete modal offers keep-tasks or cascade choices", notes: "Open a project and click Delete project. Confirm the modal matches the parent-delete pattern and clearly offers Delete project only (keep tasks) or Delete project + all tasks/descendants.", priority: "urgent" },
-    { title: "Deleting project only keeps tasks and hierarchy", notes: "Delete a temporary project using Delete project only. Confirm all tasks previously assigned to it remain active, become unassigned/Inbox eligible, and parent-child hierarchy remains intact.", priority: "urgent" },
-    { title: "Deleting project with tasks cascades through nested descendants", notes: "Create a project with nested tasks, including at least one descendant assigned to another project. Choose Delete project + all tasks/descendants and confirm every assigned task and nested descendant is soft-deleted into Trash; the modal warns about cross-project descendants first.", priority: "urgent" },
-    { title: "Project rename and delete sync across devices", notes: "Rename a cloud project on device A and sync device B. Then delete a temporary project with keep-tasks mode and confirm device B receives the project deletion and detached tasks through normal transaction sync.", priority: "urgent" },
-    { title: "REST API exposes separate GPT Actions", notes: "Open /api/taskmap/openapi.json and confirm distinct operationIds exist for getWorkspaceInfo, searchTasks, createTask, getTask, updateTask, deleteTask, completeTask, reopenTask, restoreTask, listProjects, createProject, updateProject, and deleteProject.", priority: "urgent" },
-    { title: "REST task endpoints remain compatible with legacy API", notes: "Create/search/update/complete/reopen/delete/restore tasks through the REST endpoints and confirm the same workspace entities and API_* transaction history appear as when using legacy POST /api/taskmap.", priority: "urgent" },
-    { title: "REST project endpoints create rename and delete projects", notes: "Use GET/POST /api/taskmap/projects and PATCH/DELETE /api/taskmap/projects/{projectId}. Verify PATCH renames/recolors and DELETE supports taskMode=detach and taskMode=cascade.", priority: "urgent" },
-    { title: "Legacy POST /api/taskmap remains backward compatible", notes: "Call the existing POST /api/taskmap with action=list_tasks and action=create_task and confirm integrations built for v1.4 continue working after the REST API is added.", priority: "urgent" },
-    { title: "GPT Actions OpenAPI imports without schema warnings", notes: "Import /api/taskmap/openapi.json into Custom GPT Actions. Confirm OpenAPI 3.1 is accepted and each REST operation appears as an individual callable action rather than one generic POST tool.", priority: "urgent" },
+    // v1.5 REST GPT Actions + project management checks are retained as Normal in v1.6.
+    { title: "Project can be renamed from its project view", notes: "Open a project, click Rename project, enter a new name, and confirm the sidebar, breadcrumb, task chips, and synced devices reflect the new name without changing task assignments.", priority: "normal" },
+    { title: "Project delete modal offers keep-tasks or cascade choices", notes: "Open a project and click Delete project. Confirm the modal matches the parent-delete pattern and clearly offers Delete project only (keep tasks) or Delete project + all tasks/descendants.", priority: "normal" },
+    { title: "Deleting project only keeps tasks and hierarchy", notes: "Delete a temporary project using Delete project only. Confirm all tasks previously assigned to it remain active, become unassigned/Inbox eligible, and parent-child hierarchy remains intact.", priority: "normal" },
+    { title: "Deleting project with tasks cascades through nested descendants", notes: "Create a project with nested tasks, including at least one descendant assigned to another project. Choose Delete project + all tasks/descendants and confirm every assigned task and nested descendant is soft-deleted into Trash; the modal warns about cross-project descendants first.", priority: "normal" },
+    { title: "Project rename and delete sync across devices", notes: "Rename a cloud project on device A and sync device B. Then delete a temporary project with keep-tasks mode and confirm device B receives the project deletion and detached tasks through normal transaction sync.", priority: "normal" },
+    { title: "REST API exposes separate GPT Actions", notes: "Open /api/taskmap/openapi.json and confirm distinct operationIds exist for getWorkspaceInfo, searchTasks, createTask, getTask, updateTask, deleteTask, completeTask, reopenTask, restoreTask, listProjects, createProject, updateProject, and deleteProject.", priority: "normal" },
+    { title: "REST task endpoints remain compatible with legacy API", notes: "Create/search/update/complete/reopen/delete/restore tasks through the REST endpoints and confirm the same workspace entities and API_* transaction history appear as when using legacy POST /api/taskmap.", priority: "normal" },
+    { title: "REST project endpoints create rename and delete projects", notes: "Use GET/POST /api/taskmap/projects and PATCH/DELETE /api/taskmap/projects/{projectId}. Verify PATCH renames/recolors and DELETE supports taskMode=detach and taskMode=cascade.", priority: "normal" },
+    { title: "Legacy POST /api/taskmap remains backward compatible", notes: "Call the existing POST /api/taskmap with action=list_tasks and action=create_task and confirm integrations built for v1.4 continue working after the REST API is added.", priority: "normal" },
+    { title: "GPT Actions OpenAPI imports without schema warnings", notes: "Import /api/taskmap/openapi.json into Custom GPT Actions. Confirm OpenAPI 3.1 is accepted and each REST operation appears as an individual callable action rather than one generic POST tool.", priority: "normal" },
+
+
+    // v1.6: Kanban replaces rule-based views + collapsible hierarchy. Only these new checks are Urgent.
+    { title: "Kanban replaces the old Rule-based Views section", notes: "Open Tasks and confirm the old Rule-based Views / Task categories section is gone. Confirm Kanban appears as its own left-sidebar navigation item and opens the same task scope/filter model as Tasks.", priority: "urgent" },
+    { title: "Kanban breakout selector supports Status Priority Project and dates", notes: "Open Kanban and switch Breakout among Status, Priority, Project, Start date, and Due date. Confirm each distinct value becomes a column, including Done, all four priorities, No project plus named projects, and No date plus each date currently represented in the filtered task set.", priority: "urgent" },
+    { title: "Dragging between Status columns changes real task status", notes: "Drag a task from Not started to In progress and Blocked and confirm the field updates. Drag it to Done and confirm normal completion rules run; drag a completed non-recurring task back to an open status and confirm it reopens rather than merely changing display lanes.", priority: "urgent" },
+    { title: "Kanban Done drag preserves recurrence and completion cascade", notes: "Drag a recurring task to Done and confirm exactly one next occurrence advances. Drag a parent with unfinished descendants to Done and confirm TaskMap's normal parent completion cascade still applies.", priority: "urgent" },
+    { title: "Dragging between breakout columns changes the real field", notes: "Break out by Priority and move cards between columns; confirm priority changes. Break out by Project and move a task to another project or No project; for a parent with descendants confirm the normal parent-only vs parent+subtasks project-change dialog still appears. Break out by Start date or Due date and move cards between existing date/No date lanes; confirm the corresponding date field updates, and clearing a date also clears its associated time.", priority: "urgent" },
+    { title: "Kanban keeps normal task-to-task nesting and manual reorder drag rules", notes: "In Manual sort, drag a card before/after another card in a lane and confirm manual order changes. Drop directly on another task and confirm it becomes a subtask. In a non-Manual sort, direct task drops should nest but before/after reorder should not run.", priority: "urgent" },
+    { title: "Parent rows can collapse and expand descendants", notes: "In Tasks, Today, Inbox, Completed, and Kanban where hierarchy is visible, confirm parent rows show a chevron. Collapse a parent and confirm all nested descendants disappear; expand it and confirm the same hierarchy returns without changing task data.", priority: "urgent" },
+    { title: "Expand all and Hide all control the visible hierarchy", notes: "Use Hide all at the top of a task view and confirm every visible parent hierarchy is minimized. Use Expand all and confirm all parents in the current filtered scope reopen. Hidden/filtered tasks outside the current scope should not be altered.", priority: "urgent" },
+    { title: "Collapsed parents hide descendants across different Kanban columns", notes: "Break out by Status or Priority, give a parent and child different breakout values, then collapse the parent. Confirm the descendant is hidden even though it would otherwise render in another column; expanding restores it to its own column.", priority: "urgent" },
+    { title: "Reorder up and down arrows are removed everywhere", notes: "Check desktop and mobile task lists plus Kanban. Confirm the old up/down reorder arrow buttons no longer appear. Manual ordering must still work through the dedicated drag handle.", priority: "urgent" },
+    { title: "Project-delete null transaction change passes production TypeScript", notes: "Deploy v1.6 to Vercel and confirm lib/task-service.ts no longer fails on projectId newValue:null. The project-delete change array should be typed as TransactionChange[] and production typecheck should continue past the previous v1.5 error.", priority: "urgent" },
+    { title: "Kanban remains usable on mobile", notes: "Open Kanban on a phone-size viewport. Confirm columns scroll horizontally, cards remain selectable, touch drag can move a task to a different lane or onto another task, and hierarchy expand/collapse controls remain tappable.", priority: "urgent" },
   ];
 
   // Seed atomically. V5 preserves existing QA progress and only adds checklist entries that do not already exist.
@@ -1261,7 +1260,25 @@ export async function seedQaChecklist() {
     }
 
     const existingQaAll = await db.tasks.where("projectId").equals(qa!.id).toArray();
-    const existingQaTasks = existingQaAll.filter(task => !task.deletedAt);
+    const obsoleteQaTitles = new Set([
+      "Create a custom task category",
+      "Create a multi-condition category rule",
+      "Validate an invalid category rule",
+      "Delete a custom task category",
+    ]);
+    const obsoleteQaTasks = existingQaAll.filter(task => !task.deletedAt && obsoleteQaTitles.has(task.title));
+    for (const task of obsoleteQaTasks) {
+      const retiredAt = nowIso();
+      const txId = crypto.randomUUID();
+      await db.tasks.update(task.id, { deletedAt: retiredAt, updatedAt: retiredAt, revision: task.revision + 1 });
+      await db.transactions.add({ id: txId, entityType: "task", entityId: task.id, actionType: "QA_CHECK_RETIRED", deviceId, clientTimestamp: retiredAt, serverReceivedTimestamp: null, baseRevision: task.revision, resultRevision: task.revision + 1, syncStatus: "pending" });
+      await db.transactionChanges.bulkAdd([
+        { id: crypto.randomUUID(), transactionId: txId, fieldName: "deletedAt", oldValue: task.deletedAt, newValue: retiredAt },
+        { id: crypto.randomUUID(), transactionId: txId, fieldName: "updatedAt", oldValue: task.updatedAt, newValue: retiredAt },
+        { id: crypto.randomUUID(), transactionId: txId, fieldName: "revision", oldValue: task.revision, newValue: task.revision + 1 },
+      ]);
+    }
+    const existingQaTasks = existingQaAll.filter(task => !task.deletedAt && !obsoleteQaTitles.has(task.title));
     const desiredPriority = new Map(checklist.map(item => [item.title, item.priority ?? "normal"] as const));
     const priorityUpdates = existingQaTasks.filter(task => desiredPriority.has(task.title) && task.priority !== desiredPriority.get(task.title));
     if (priorityUpdates.length) {

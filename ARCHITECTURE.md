@@ -129,3 +129,10 @@ TaskMap v1.3 replaces mandatory Supabase Auth for normal sync with explicit, key
 - Project deletion is one grouped logical action. `detach` clears `projectId` from tasks (including Trash rows) and deletes the project entity; `cascade` soft-deletes all active tasks assigned to the project plus every nested descendant, then deletes the project entity.
 - Cascade can cross project boundaries through hierarchy, so the UI warns when nested descendants currently belong to another project.
 - Project entity deletion uses a `__entity__ -> null` transaction change so cloud materialized state records the project as deleted while preserving immutable history.
+
+
+## v1.6 Kanban presentation layer
+
+Kanban is a presentation of the same task entities used by Tasks; it does not create a parallel board/card data model. The current breakout field is local UI preference and columns are derived from task values. Initial breakout fields are Status, Priority, and Project. A cross-column drop commits the same normal task mutations used elsewhere; Status Done/Reopen routes through completion behavior, and Project changes reuse the existing descendant-scope dialog.
+
+Hierarchy collapse is view state only. Collapsing a parent never changes task relationships or sync data. The visible task set is filtered by collapsed ancestors before list/Kanban rendering, so descendants can be hidden even when their breakout value places them in another Kanban column.

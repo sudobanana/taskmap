@@ -8,7 +8,7 @@ import { updateDevBacklogItem } from "@/lib/task-service";
 import type { AssistantAction, Project, Task } from "@/lib/types";
 
 type Message = { role: "user" | "assistant"; text: string };
-type DestructiveAction = Extract<AssistantAction, { type: "delete_task" } | { type: "delete_category" }>;
+type DestructiveAction = Extract<AssistantAction, { type: "delete_task" }>;
 
 export default function AssistantPanel({ tasks, projects, onClose, onExecuteAction }: {
   tasks: Task[];
@@ -49,8 +49,8 @@ export default function AssistantPanel({ tasks, projects, onClose, onExecuteActi
       const data = await response.json();
       if (!response.ok) throw new Error(data?.error || "Assistant request failed.");
       const actions = Array.isArray(data?.actions) ? data.actions as AssistantAction[] : [];
-      const destructive = actions.filter((action): action is DestructiveAction => action.type === "delete_task" || action.type === "delete_category");
-      const safe = actions.filter(action => action.type !== "delete_task" && action.type !== "delete_category");
+      const destructive = actions.filter((action): action is DestructiveAction => action.type === "delete_task");
+      const safe = actions.filter(action => action.type !== "delete_task");
       for (const action of safe) await onExecuteAction(action);
       if (destructive.length) {
         setPendingDestructive(destructive);
@@ -85,7 +85,7 @@ export default function AssistantPanel({ tasks, projects, onClose, onExecuteActi
             {busy && <div className="assistant-message assistant">Working…</div>}
           </div>
           {error?.includes("OPENAI_API_KEY") && <div className="assistant-config-note">Add <code>OPENAI_API_KEY=...</code> to <code>.env.local</code>, then restart TaskMap. On Vercel, add the same variable in Project Settings → Environment Variables.</div>}
-          {pendingDestructive && <div className="assistant-confirm"><strong>Confirm destructive changes?</strong><span>{pendingDestructive.map(action => action.type === "delete_task" ? `Delete task: ${action.taskTitle}` : `Delete category: ${action.name}`).join(" · ")}</span><div><button className="confirm-danger" onClick={async () => { const actions = pendingDestructive; setPendingDestructive(null); for (const action of actions) await onExecuteAction(action); setMessages(current => [...current, { role: "assistant", text: "Confirmed destructive changes were applied." }]); }}>Confirm</button><button onClick={() => { setPendingDestructive(null); setMessages(current => [...current, { role: "assistant", text: "Destructive changes canceled." }]); }}>Cancel</button></div></div>}
+          {pendingDestructive && <div className="assistant-confirm"><strong>Confirm destructive changes?</strong><span>{pendingDestructive.map(action => `Delete task: ${action.taskTitle}`).join(" · ")}</span><div><button className="confirm-danger" onClick={async () => { const actions = pendingDestructive; setPendingDestructive(null); for (const action of actions) await onExecuteAction(action); setMessages(current => [...current, { role: "assistant", text: "Confirmed destructive changes were applied." }]); }}>Confirm</button><button onClick={() => { setPendingDestructive(null); setMessages(current => [...current, { role: "assistant", text: "Destructive changes canceled." }]); }}>Cancel</button></div></div>}
           <div className="assistant-compose">
             <textarea value={input} onChange={event => setInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="Tell TaskMap what to do…" />
             <button onClick={() => void send()} disabled={!input.trim() || busy} aria-label="Send instruction"><Send size={17} /></button>
