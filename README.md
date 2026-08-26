@@ -1,25 +1,25 @@
-# TaskMap QA rebuild v14
+# TaskMap QA rebuild v15
 
 A local-first TaskMap prototype using Next.js, React, TypeScript, Dexie/IndexedDB, React Flow, and an optional OpenAI-powered **Ask TaskMap** assistant.
 
-## V14 data behavior
+## V15 data behavior
 
-- IndexedDB schema **v9 preserves existing QA progress**.
-- Existing QA checks are demoted to Normal; only the newest v14 calendar/icon checks seed as **Urgent**.
+- IndexedDB schema **v10 preserves tasks and QA progress** but resets saved Mind Map node positions/collapse state once so the redesigned planning canvas opens cleanly.
+- Existing QA checks are demoted to Normal; only the newest v15 Mind Map/task-drag checks seed as **Urgent**.
 - Task deletion remains soft/tombstoned and writes normal transaction history.
 - Recurring tasks continue to keep one active materialized occurrence while Calendar projects future occurrences virtually.
 
-## New in v14
+## New in v15
 
-- Calendar now has Day and Week views.
-- Week view can show either Monday–Friday (5 days) or Monday–Sunday (7 days).
-- Unscheduled tasks share one strip across the top of the visible week and can be dragged into any day/time.
-- Scheduled blocks can move vertically and across day columns, resize, or be dragged back to the Week Tasks strip to unschedule.
-- Completed and virtual recurring occurrences remain visible in Week view using the same rules as Day view.
-- The current-time line appears only inside today's week column.
-- Calendar view/week-length preferences persist locally.
-- The Chrome tab favicon and PWA icon now use the same indigo GitBranch mark as the TaskMap sidebar brand.
-- Today now includes a Completed filter; Scheduled, Unscheduled, and Urgent counters exclude completed tasks, while Completed counts only tasks completed today.
+- Mind Map is redesigned as a visual planning workspace around the real parent/child hierarchy rather than a loose grid of task cards.
+- Parent/child trees receive a clean automatic initial layout and can be reset at any time with **Auto Arrange**.
+- Layout direction can switch between **Left → right** and **Top → bottom**.
+- Parent nodes can collapse/expand whole descendant branches without changing task relationships.
+- Planning nodes show useful context including priority, project, due date, tags, recurrence, completion state, and child count.
+- Completed nodes can be Dimmed, shown normally, or hidden.
+- The right-side Available Tasks tray remains scope-aware; tasks can be dropped onto empty canvas or directly onto a node to make them a child.
+- Hierarchy connections remain selectable/deletable and use a distinct solid-line style.
+- Task-list drag behavior is restored with a dedicated draggable `⋮⋮` handle. Manual sort supports insertion-line reordering, while dropping directly onto another task makes it a subtask even outside Manual sort. Sidebar project drops still work.
 
 ## Previous feature set
 

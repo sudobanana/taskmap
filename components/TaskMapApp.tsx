@@ -280,7 +280,8 @@ export default function TaskMapApp() {
   }
 
   async function handleDrop(targetId: string, mode: DropMode) {
-    if (!draggingId || draggingId === targetId || sortMode !== "manual") return;
+    if (!draggingId || draggingId === targetId) return;
+    if (mode !== "nest" && sortMode !== "manual") return;
     const dragged = tasks.find(task => task.id === draggingId);
     const target = tasks.find(task => task.id === targetId);
     if (!dragged || !target) return;
@@ -687,6 +688,7 @@ export default function TaskMapApp() {
                     isFirst={index === 0}
                     isLast={index === displayEntries.length - 1}
                     onMove={delta => moveBy(task.id, delta)}
+                    dragging={draggingId === task.id}
                     onDragStart={event => { event.dataTransfer.setData("application/taskmap-task", task.id); event.dataTransfer.setData("text/plain", task.id); setDraggingId(task.id); setDropIndicator(null); }}
                     onDragHover={(targetId, mode) => setDropIndicator({ targetId, mode })}
                     dropMode={dropIndicator?.targetId === task.id ? dropIndicator.mode : null}
@@ -763,7 +765,7 @@ function StatFilterCard({ label, value, detail, active, danger = false, onClick 
   return <button className={`stat-card stat-filter ${active ? "active" : ""} ${danger ? "danger" : ""}`} aria-pressed={active} onClick={onClick}><span>{label}</span><strong>{value}</strong><small>{detail}</small></button>;
 }
 
-function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, bulkChecked, onBulkToggle, manual, isFirst, isLast, onMove, onDragStart, onDragHover, dropMode, onDrop, onDragEnd, onProjectClick, onParentClick, onTagClick, onToggle, recurringState, checkboxProtected, nextOccurrenceLabel }: {
+function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, bulkChecked, onBulkToggle, manual, isFirst, isLast, onMove, dragging, onDragStart, onDragHover, dropMode, onDrop, onDragEnd, onProjectClick, onParentClick, onTagClick, onToggle, recurringState, checkboxProtected, nextOccurrenceLabel }: {
   task: Task;
   depth: number;
   project: Project | null;
@@ -777,7 +779,8 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
   isFirst: boolean;
   isLast: boolean;
   onMove: (delta: number) => void;
-  onDragStart: (event: DragEvent<HTMLDivElement>) => void;
+  dragging: boolean;
+  onDragStart: (event: DragEvent<HTMLSpanElement>) => void;
   onDragHover: (targetId: string, mode: DropMode) => void;
   dropMode: DropMode | null;
   onDrop: (targetId: string, mode: DropMode) => void;
@@ -802,17 +805,24 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
 
   return (
     <div
-      className={`${selected ? "task-row selected" : "task-row"} ${visuallyDone ? "completed-row" : ""} ${recurringState ? `recurring-transition-${recurringState}` : ""} ${dropMode ? `drop-${dropMode}` : ""}`}
+      className={`${selected ? "task-row selected" : "task-row"} ${visuallyDone ? "completed-row" : ""} ${recurringState ? `recurring-transition-${recurringState}` : ""} ${dropMode ? `drop-${dropMode}` : ""} ${dragging ? "dragging-task-row" : ""}`}
       style={{ paddingLeft: `${18 + depth * 26}px` }}
       onClick={onSelect}
-      draggable
-      onDragStart={event => { event.dataTransfer.effectAllowed = "move"; onDragStart(event); }}
-      onDragOver={event => { if (manual) { event.preventDefault(); onDragHover(task.id, modeFromEvent(event)); } }}
-      onDrop={event => { event.preventDefault(); if (manual) onDrop(task.id, modeFromEvent(event)); }}
-      onDragEnd={onDragEnd}
+      onDragOver={event => { event.preventDefault(); onDragHover(task.id, manual ? modeFromEvent(event) : "nest"); }}
+      onDrop={event => { event.preventDefault(); onDrop(task.id, manual ? modeFromEvent(event) : "nest"); }}
     >
       {bulkMode && <label className="bulk-task-check" onClick={event => event.stopPropagation()}><input type="checkbox" checked={bulkChecked} onChange={onBulkToggle} aria-label={`Select ${task.title}`} /></label>}
-      <span className="drag-handle" title={manual ? "Drag between tasks to reorder, onto a task to make it a subtask, or onto a sidebar project" : "Drag onto a sidebar project to assign this task"} aria-hidden="true">⋮⋮</span>
+      <span
+        className="drag-handle task-row-drag-handle"
+        draggable
+        title={manual ? "Drag between tasks to reorder, onto a task to make it a subtask, or onto a sidebar project" : "Drag onto another task to make it a subtask, or onto a sidebar project to assign it"}
+        aria-label={`Drag ${task.title}`}
+        role="button"
+        tabIndex={0}
+        onClick={event => event.stopPropagation()}
+        onDragStart={event => { event.stopPropagation(); event.dataTransfer.effectAllowed = "move"; onDragStart(event); }}
+        onDragEnd={event => { event.stopPropagation(); onDragEnd(); }}
+      >⋮⋮</span>
       <button className="check-button" disabled={checkboxProtected} title={checkboxProtected ? "Protected briefly so the next recurring occurrence is not completed accidentally" : undefined} aria-label={visuallyDone ? `Reopen ${task.title}` : `Complete ${task.title}`} onClick={event => { event.stopPropagation(); if (!checkboxProtected) onToggle(); }}>{visuallyDone ? <CheckCircle2 size={21} /> : <Circle size={21} />}</button>
       <div className="task-copy">
         <strong className={visuallyDone ? "done" : ""}>{task.title}</strong>

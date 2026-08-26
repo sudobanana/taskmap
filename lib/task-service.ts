@@ -395,6 +395,63 @@ export async function moveTaskNode(taskId: string, x: number, y: number) {
   });
 }
 
+
+export async function setTaskNodeCollapsed(taskId: string, collapsed: boolean, fallbackX = 0, fallbackY = 0) {
+  const now = nowIso();
+  const before = await db.taskLayouts.get(taskId);
+  if (before && before.collapsed === collapsed) return;
+  const txId = crypto.randomUUID();
+  const next: TaskLayout = { taskId, x: before?.x ?? fallbackX, y: before?.y ?? fallbackY, collapsed, updatedAt: now };
+  await db.transaction("rw", db.taskLayouts, db.transactions, db.transactionChanges, async () => {
+    await db.taskLayouts.put(next);
+    await db.transactions.add({
+      id: txId,
+      entityType: "task_layout",
+      entityId: taskId,
+      actionType: collapsed ? "MAP_BRANCH_COLLAPSED" : "MAP_BRANCH_EXPANDED",
+      deviceId: getDeviceId(),
+      clientTimestamp: now,
+      serverReceivedTimestamp: null,
+      baseRevision: 0,
+      resultRevision: 0,
+      syncStatus: "pending",
+    });
+    await db.transactionChanges.add({ id: crypto.randomUUID(), transactionId: txId, fieldName: "collapsed", oldValue: before?.collapsed ?? false, newValue: collapsed });
+  });
+}
+
+export async function arrangeTaskNodes(entries: Array<{ taskId: string; x: number; y: number }>) {
+  if (!entries.length) return;
+  const now = nowIso();
+  const groupId = crypto.randomUUID();
+  const deviceId = getDeviceId();
+  await db.transaction("rw", db.taskLayouts, db.transactions, db.transactionChanges, async () => {
+    for (const entry of entries) {
+      const before = await db.taskLayouts.get(entry.taskId);
+      if (before && before.x === entry.x && before.y === entry.y) continue;
+      const txId = crypto.randomUUID();
+      await db.taskLayouts.put({ taskId: entry.taskId, x: entry.x, y: entry.y, collapsed: before?.collapsed ?? false, updatedAt: now });
+      await db.transactions.add({
+        id: txId,
+        entityType: "task_layout",
+        entityId: entry.taskId,
+        actionType: "MAP_AUTO_ARRANGED",
+        groupId,
+        deviceId,
+        clientTimestamp: now,
+        serverReceivedTimestamp: null,
+        baseRevision: 0,
+        resultRevision: 0,
+        syncStatus: "pending",
+      });
+      await db.transactionChanges.bulkAdd([
+        { id: crypto.randomUUID(), transactionId: txId, fieldName: "x", oldValue: before?.x ?? null, newValue: entry.x },
+        { id: crypto.randomUUID(), transactionId: txId, fieldName: "y", oldValue: before?.y ?? null, newValue: entry.y },
+      ]);
+    }
+  });
+}
+
 export async function createProject(name: string, color = "#5B5BD6") {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Project name is required");
@@ -921,10 +978,19 @@ export async function seedQaChecklist() {
 
 
     // V14: weekly Calendar and browser/PWA identity are the newest validation targets.
-    { title: "Calendar switches between Day and Week views", notes: "Open Calendar, switch to Week, and confirm previous/next navigation moves one week at a time. Click a day header and confirm it opens that date in Day view.", priority: "urgent" },
-    { title: "Calendar supports 5-day and 7-day weeks with a shared unscheduled strip", notes: "In Week view toggle between 5 days and 7 days. Confirm unscheduled tasks span the shared Week Tasks strip across the top, can be dragged into any visible day/time, scheduled blocks can move across day columns, and dragging a block back to Week Tasks unschedules it.", priority: "urgent" },
-    { title: "Browser tab uses the TaskMap sidebar logo", notes: "Open or refresh TaskMap in Chrome and confirm the tab favicon matches the indigo GitBranch logo shown in the upper-left TaskMap brand. Also confirm the PWA manifest references the same icon.", priority: "urgent" },
-    { title: "Today Completed filter and counters exclude completed work", notes: "Open Today and confirm a Completed filter appears next to Urgent. Scheduled, Unscheduled, and Urgent counts must exclude completed tasks. Completed must count and show only tasks whose completed timestamp is today, including tasks completed today that are no longer otherwise due/scheduled/urgent today.", priority: "urgent" },
+    { title: "Calendar switches between Day and Week views", notes: "Open Calendar, switch to Week, and confirm previous/next navigation moves one week at a time. Click a day header and confirm it opens that date in Day view.", priority: "normal" },
+    { title: "Calendar supports 5-day and 7-day weeks with a shared unscheduled strip", notes: "In Week view toggle between 5 days and 7 days. Confirm unscheduled tasks span the shared Week Tasks strip across the top, can be dragged into any visible day/time, scheduled blocks can move across day columns, and dragging a block back to Week Tasks unschedules it.", priority: "normal" },
+    { title: "Browser tab uses the TaskMap sidebar logo", notes: "Open or refresh TaskMap in Chrome and confirm the tab favicon matches the indigo GitBranch logo shown in the upper-left TaskMap brand. Also confirm the PWA manifest references the same icon.", priority: "normal" },
+    { title: "Today Completed filter and counters exclude completed work", notes: "Open Today and confirm a Completed filter appears next to Urgent. Scheduled, Unscheduled, and Urgent counts must exclude completed tasks. Completed must count and show only tasks whose completed timestamp is today, including tasks completed today that are no longer otherwise due/scheduled/urgent today.", priority: "normal" },
+
+    // V15: redesigned visual planning and restored task-row drag interactions.
+    { title: "Mind Map auto-arranges parent child hierarchy", notes: "Open Mind Map after upgrading and confirm the canvas starts in a clean parent-to-child tree. Move nodes manually, then click Auto Arrange and confirm the hierarchy is laid out cleanly again.", priority: "urgent" },
+    { title: "Mind Map switches horizontal and vertical planning layouts", notes: "Change Layout between Left to right and Top to bottom. Click Auto Arrange in each mode and confirm hierarchy direction and handles match the selected orientation.", priority: "urgent" },
+    { title: "Mind Map branches can collapse and expand", notes: "Use the child-count control on a parent node. Confirm all nested descendants hide when collapsed and return when expanded without changing the underlying parent relationships.", priority: "urgent" },
+    { title: "Mind Map planning cards show useful task context", notes: "Confirm map nodes show title plus useful context such as priority, project, due date, recurrence, tags, completion state, and child count without looking like miniature task-list rows.", priority: "urgent" },
+    { title: "Mind Map available tasks can drop directly onto a parent node", notes: "Use Project or Parent scope, drag a task from Available tasks directly onto a node, and confirm it becomes that node's child and inherits the target project when appropriate.", priority: "urgent" },
+    { title: "Mind Map completed tasks can dim show or hide", notes: "Change the Completed control between Dim, Show normally, and Hide. Confirm the canvas updates without deleting or changing completion data.", priority: "urgent" },
+    { title: "Task row drag handle restores reorder and nesting", notes: "Set Tasks sort to Manual. Drag a task by the dedicated handle between rows and confirm the insertion line appears and order persists. Then drag the task onto the center of another task and confirm it becomes a subtask. Also verify the same handle can still drop the task onto a sidebar project.", priority: "urgent" },
   ];
 
   // Seed atomically. V5 preserves existing QA progress and only adds checklist entries that do not already exist.

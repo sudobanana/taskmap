@@ -211,6 +211,23 @@ export class TaskMapDB extends Dexie {
           if (task.projectId === qaProject.id && task.priority === "urgent") await taskTable.update(task.id, { priority: "normal" });
         }
       });
+
+    // V10 resets only Mind Map visual layout so the redesigned planning canvas opens cleanly.
+    // Tasks, projects, QA completion progress, recurrence history, and transactions are preserved.
+    this.version(10)
+      .stores({
+        tasks: "id, projectId, parentTaskId, startDate, dueDate, priority, status, manualOrder, createdAt, updatedAt, deletedAt, recurrenceSeriesId",
+        projects: "id, name, createdAt, updatedAt",
+        taskCategories: "id, name, createdAt, updatedAt",
+        taskLayouts: "taskId, updatedAt",
+        transactions: "id, entityId, entityType, clientTimestamp, syncStatus",
+        transactionChanges: "id, transactionId, fieldName",
+        devBacklog: "id, kind, status, createdAt, updatedAt",
+        taskTemplates: "id, name, createdAt, updatedAt",
+      })
+      .upgrade(async tx => {
+        await tx.table("taskLayouts").clear();
+      });
   }
 }
 

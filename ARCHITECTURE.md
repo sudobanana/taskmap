@@ -77,3 +77,17 @@ The map can project all tasks, one project, or one parent subtree. Tasks outside
 Recurring series store a recurrence rule plus a single real active occurrence. Future calendar occurrences are virtual projections calculated for the visible day. Completing the active occurrence persists it as history and materializes only the next real occurrence. This prevents infinite/large recurrence schedules from filling IndexedDB.
 
 Task templates are stored separately in `taskTemplates`. Each template contains template-local node IDs and parent references. Using a template creates fresh Task IDs and rebuilds the hierarchy through the normal task service/transaction layer.
+
+## V15 Mind Map planning model
+
+The Mind Map is a view over the same `parentTaskId` hierarchy used by Tasks and Task Details. It does not own a separate hierarchy model.
+
+- Scope can be All Tasks, one Project, or one Parent hierarchy.
+- Parent/child edges are derived directly from `parentTaskId` and therefore remain synchronized with task-list nesting and Task Details.
+- `taskLayouts` stores only visual state: x/y position and collapsed state.
+- The v10 IndexedDB migration clears only `taskLayouts` once so the redesigned tree can start from a clean automatic layout.
+- Auto Arrange computes a hierarchy layout and persists the resulting x/y positions as grouped `MAP_AUTO_ARRANGED` layout transactions.
+- Collapsing a branch changes only the visual `collapsed` flag; it never changes parent/child data.
+- Dropping an available task directly on a node updates the dropped task's `parentTaskId` through the normal task transaction service.
+
+Task-list drag behavior uses a dedicated native drag handle. Row centers remain hierarchy drop targets in every sort mode, while before/after reordering is enabled only in Manual sort. This keeps parent assignment available without making non-manual sorts pretend they have a persistent visual order.

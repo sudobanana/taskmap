@@ -638,3 +638,53 @@ nav { display: grid; gap: 4px; }
   .calendar-heading-controls { justify-content: flex-start; }
   .week-calendar-inner { min-width: 900px; }
 }
+
+/* V15 visual planning Mind Map + restored task-row drag handle */
+.task-row-drag-handle { display: inline-grid; place-items: center; min-width: 18px; align-self: stretch; cursor: grab; touch-action: none; }
+.task-row-drag-handle:active { cursor: grabbing; }
+.task-row.dragging-task-row { opacity: .58; box-shadow: inset 3px 0 0 var(--primary); }
+
+.planning-map-view { padding-top: 20px; }
+.planning-map-toolbar { align-items: flex-end; }
+.map-scope-summary { display: flex; align-items: center; gap: 5px; margin: 5px 0 0; color: var(--muted); font-size: 10px; }
+.map-auto-arrange { display: inline-flex; align-items: center; gap: 6px; height: 35px; }
+.planning-map-workspace { min-height: 460px; }
+.planning-flow-wrap { background: radial-gradient(circle at 1px 1px, #e8eaf0 1px, transparent 0) 0 0 / 24px 24px, #fbfbfd; }
+.planning-node { min-width: 205px; max-width: 255px; padding: 10px 12px 11px; border-left-width: 1px; border-top: 3px solid #a9afb8; border-radius: 12px; box-shadow: 0 7px 22px rgba(31,36,46,.10); text-decoration: none; cursor: pointer; }
+.planning-node.priority-urgent { border-top-color: var(--danger); border-left-color: var(--border); }
+.planning-node.priority-high { border-top-color: #e68a3f; border-left-color: var(--border); }
+.planning-node.priority-normal { border-top-color: var(--primary); border-left-color: var(--border); }
+.planning-node.priority-low { border-top-color: #b6bbc3; border-left-color: var(--border); }
+.planning-node.done { text-decoration: none; opacity: 1; }
+.planning-node.dim-completed { opacity: .48; }
+.planning-node-topline { display: flex; align-items: center; gap: 5px; min-height: 17px; margin-bottom: 5px; }
+.planning-priority-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #b6bbc3; }
+.planning-priority-dot.urgent { background: var(--danger); }
+.planning-priority-dot.high { background: #e68a3f; }
+.planning-priority-dot.normal { background: var(--primary); }
+.planning-project-pill, .planning-repeat-pill, .planning-complete-pill, .planning-tag-pill { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 130px; border-radius: 999px; padding: 2px 6px; font-size: 8px; font-weight: 800; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.planning-project-pill { background: #f0f0ff; color: #4e4ebd; }
+.planning-repeat-pill { background: #edf8f5; color: #23786e; }
+.planning-complete-pill { background: #edf8ef; color: #2d7a43; }
+.planning-tag-pill { background: #f3f4f6; color: #636b78; }
+.planning-node-title-row { display: flex; align-items: flex-start; gap: 8px; }
+.planning-node-title-row > strong { min-width: 0; flex: 1; color: var(--text); font-size: 12px; line-height: 1.3; }
+.planning-collapse-button { display: inline-flex; align-items: center; gap: 2px; border: 1px solid #e0e2e8; border-radius: 6px; background: #fafbfc; color: #6c7380; padding: 2px 4px; font-size: 8px; font-weight: 800; cursor: pointer; }
+.planning-node-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 7px; color: var(--muted); font-size: 8px; font-weight: 650; }
+.planning-add-child { position: absolute; right: -10px; bottom: -10px; display: grid; place-items: center; width: 23px; height: 23px; border: 1px solid #d8daf1; border-radius: 50%; background: white; color: var(--primary); box-shadow: 0 2px 8px rgba(31,36,46,.12); cursor: pointer; }
+.planning-add-child:hover { background: #f1f1ff; }
+.planning-node .task-handle { width: 8px; height: 8px; border: 2px solid white; background: #89909d; }
+.planning-node:hover .task-handle { background: var(--primary); }
+.planning-task-tray { padding: 14px; }
+.planning-task-tray .map-task-tray-heading > div { display: grid; gap: 1px; }
+.planning-task-tray .map-task-tray-heading small { color: var(--muted); font-size: 8px; }
+.planning-tray-task > span:last-child { min-width: 0; display: grid; gap: 2px; }
+.planning-tray-task strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.planning-tray-task small { color: var(--muted); font-size: 8px; }
+.react-flow__edge.hierarchy-edge .react-flow__edge-path { stroke-linecap: round; }
+.react-flow__edge.selected .react-flow__edge-path { filter: drop-shadow(0 0 2px rgba(91,91,214,.25)); }
+
+@media (max-width: 1050px) {
+  .planning-map-toolbar { align-items: flex-start; }
+  .planning-map-toolbar .map-filter-controls { justify-content: flex-start; }
+}
