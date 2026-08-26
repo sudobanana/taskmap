@@ -68,6 +68,8 @@ export interface Task {
   updatedAt: string;
   completedAt: string | null;
   deletedAt: string | null;
+  /** Local permanent-delete marker. Purged rows are hidden from Trash but retained as a minimal tombstone/audit anchor. */
+  purgedAt: string | null;
   revision: number;
   recurrence: RecurrenceRule | null;
   recurrenceSeriesId: string | null;

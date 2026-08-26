@@ -25,7 +25,7 @@ async function nextManualOrder() {
   return (first?.manualOrder ?? 1000) - 1000;
 }
 
-export async function createTask(input: Partial<Task> & Pick<Task, "title">) {
+export async function createTask(input: Partial<Task> & Pick<Task, "title">, options?: { groupId?: string | null; actionType?: string }) {
   const now = nowIso();
   const task: Task = {
     id: crypto.randomUUID(),
@@ -47,6 +47,7 @@ export async function createTask(input: Partial<Task> & Pick<Task, "title">) {
     updatedAt: now,
     completedAt: input.status === "done" ? now : null,
     deletedAt: null,
+    purgedAt: null,
     revision: 1,
     recurrence: input.recurrence ?? null,
     recurrenceSeriesId: input.recurrenceSeriesId ?? (input.recurrence?.enabled ? crypto.randomUUID() : null),
@@ -60,7 +61,8 @@ export async function createTask(input: Partial<Task> & Pick<Task, "title">) {
       id: txId,
       entityType: "task",
       entityId: task.id,
-      actionType: "TASK_CREATED",
+      actionType: options?.actionType ?? "TASK_CREATED",
+      groupId: options?.groupId ?? null,
       deviceId: getDeviceId(),
       clientTimestamp: now,
       serverReceivedTimestamp: null,
@@ -218,6 +220,102 @@ export async function deleteTaskSet(taskIds: string[], childMode: "cascade" | "o
       await db.transactionChanges.bulkAdd([
         { id: crypto.randomUUID(), transactionId: txId, fieldName: "deletedAt", oldValue: before.deletedAt, newValue: now },
       ]);
+    }
+  });
+}
+
+export async function restoreTaskSet(taskIds: string[], includeHierarchy = false) {
+  const requested = [...new Set(taskIds)];
+  if (!requested.length) return;
+  const allTasks = await db.tasks.toArray();
+  const byId = new Map(allTasks.map(task => [task.id, task]));
+  const restoreIds = new Set(requested.filter(id => byId.get(id)?.deletedAt && !byId.get(id)?.purgedAt));
+
+  if (includeHierarchy) {
+    const queue = [...restoreIds];
+    while (queue.length) {
+      const id = queue.shift()!;
+      const task = byId.get(id);
+      if (!task) continue;
+      if (task.parentTaskId) {
+        const parent = byId.get(task.parentTaskId);
+        if (parent?.deletedAt && !parent.purgedAt && !restoreIds.has(parent.id)) {
+          restoreIds.add(parent.id);
+          queue.push(parent.id);
+        }
+      }
+      for (const child of allTasks.filter(candidate => candidate.parentTaskId === id && candidate.deletedAt && !candidate.purgedAt)) {
+        if (restoreIds.has(child.id)) continue;
+        restoreIds.add(child.id);
+        queue.push(child.id);
+      }
+    }
+  }
+
+  const now = nowIso();
+  const groupId = crypto.randomUUID();
+  await db.transaction("rw", db.tasks, db.transactions, db.transactionChanges, async () => {
+    for (const id of restoreIds) {
+      const before = await db.tasks.get(id);
+      if (!before?.deletedAt || before.purgedAt) continue;
+      const parent = before.parentTaskId ? await db.tasks.get(before.parentTaskId) : null;
+      const parentWillBeActive = !before.parentTaskId || Boolean(parent && (!parent.deletedAt || restoreIds.has(parent.id)));
+      const patch: Partial<Task> = {
+        deletedAt: null,
+        parentTaskId: parentWillBeActive ? before.parentTaskId : null,
+        autoCompletedByParentId: parentWillBeActive ? before.autoCompletedByParentId : null,
+        updatedAt: now,
+        revision: before.revision + 1,
+      };
+      await db.tasks.update(id, patch);
+      const txId = crypto.randomUUID();
+      await db.transactions.add({
+        id: txId,
+        entityType: "task",
+        entityId: id,
+        actionType: "TASK_RESTORED",
+        groupId,
+        deviceId: getDeviceId(),
+        clientTimestamp: now,
+        serverReceivedTimestamp: null,
+        baseRevision: before.revision,
+        resultRevision: before.revision + 1,
+        syncStatus: "pending",
+      });
+      await db.transactionChanges.bulkAdd([
+        { id: crypto.randomUUID(), transactionId: txId, fieldName: "deletedAt", oldValue: before.deletedAt, newValue: null },
+        ...(before.parentTaskId !== patch.parentTaskId ? [{ id: crypto.randomUUID(), transactionId: txId, fieldName: "parentTaskId", oldValue: before.parentTaskId, newValue: patch.parentTaskId }] : []),
+      ]);
+    }
+  });
+}
+
+export async function permanentlyDeleteTaskSet(taskIds: string[]) {
+  const ids = [...new Set(taskIds)];
+  if (!ids.length) return;
+  const now = nowIso();
+  const candidates = (await db.tasks.bulkGet(ids)).filter((task): task is Task => Boolean(task?.deletedAt && !task?.purgedAt));
+  if (!candidates.length) return;
+  await db.transaction("rw", db.tasks, db.taskLayouts, db.transactions, db.transactionChanges, async () => {
+    for (const before of candidates) {
+      const patch: Partial<Task> = {
+        purgedAt: now,
+        notes: "",
+        tags: [],
+        startDate: null,
+        startTime: null,
+        estimatedMinutes: null,
+        dueDate: null,
+        dueTime: null,
+        recurrence: null,
+        updatedAt: now,
+        revision: before.revision + 1,
+      };
+      await db.tasks.update(before.id, patch);
+      await db.taskLayouts.delete(before.id);
+      const txId = crypto.randomUUID();
+      await db.transactions.add({ id: txId, entityType: "task", entityId: before.id, actionType: "TASK_PERMANENTLY_DELETED", deviceId: getDeviceId(), clientTimestamp: now, serverReceivedTimestamp: null, baseRevision: before.revision, resultRevision: before.revision + 1, syncStatus: "pending" });
+      await db.transactionChanges.add({ id: crypto.randomUUID(), transactionId: txId, fieldName: "purgedAt", oldValue: before.purgedAt ?? null, newValue: now });
     }
   });
 }
@@ -994,15 +1092,24 @@ export async function seedQaChecklist() {
 
 
     // v1.1: mobile/responsive release validation targets. v15.1 is the v1.0 product baseline.
-    { title: "Mobile bottom navigation replaces the desktop sidebar", notes: "Open TaskMap at phone width. Confirm the desktop sidebar is hidden and the fixed bottom navigation shows Today, Tasks, Quick Add, Calendar, and More with safe-area spacing.", priority: "urgent" },
-    { title: "Mobile More menu exposes secondary navigation and projects", notes: "Tap More on a phone. Confirm Inbox, Home, Map, Completed, Templates, Settings, Ask TaskMap, project shortcuts, and sync/offline status are accessible without the desktop sidebar.", priority: "urgent" },
-    { title: "Mobile Quick Add creates one or many tasks", notes: "Tap the center + button from multiple views. Confirm the Quick Add sheet opens without changing views, supports comma-delimited task creation, respects the current parent/project context, and closes after creation.", priority: "urgent" },
-    { title: "Task Details becomes a full-screen mobile editor", notes: "Open a task on a phone. Confirm Task Details uses the full screen, all fields remain editable, field drag handles remain touchable, Notes/tag/repeat controls fit without horizontal clipping, and closing returns to the previous view.", priority: "urgent" },
-    { title: "Touch task drag can reorder and create subtasks", notes: "On a touch device use the task row drag handle. In Manual sort drag between rows and confirm the insertion line/reorder. Drag onto the center of another task and confirm it becomes a subtask without needing native HTML drag events.", priority: "urgent" },
-    { title: "Mobile Calendar day view is touch friendly", notes: "Open Calendar on a phone. Confirm Day view is readable, time labels and task blocks fit the screen, scheduled blocks can be moved/resized by touch, and dragging a scheduled block into Day Tasks unschedules it.", priority: "urgent" },
-    { title: "Mobile Calendar schedules unscheduled tasks by touch", notes: "Use the grip on an unscheduled Day/Week Task and drag it onto the timeline. Confirm the target highlights and the task receives the selected day/time. Verify tasks without duration retain the placeholder-duration warning.", priority: "urgent" },
-    { title: "Mobile weekly Calendar scrolls instead of compressing", notes: "Switch Calendar to 5-day and 7-day Week views on a phone. Confirm the shared Week Tasks strip remains usable and the week timeline scrolls horizontally with readable day columns.", priority: "urgent" },
-    { title: "TaskMap PWA respects mobile safe areas and standalone layout", notes: "Install/open TaskMap as a PWA or emulate standalone display. Confirm the bottom nav, full-screen Task Details, sheets, and app content avoid device notches/home indicators and the TaskMap icon/manifest remain correct.", priority: "urgent" },
+    { title: "Mobile bottom navigation replaces the desktop sidebar", notes: "Open TaskMap at phone width. Confirm the desktop sidebar is hidden and the fixed bottom navigation shows Today, Tasks, Quick Add, Calendar, and More with safe-area spacing.", priority: "normal" },
+    { title: "Mobile More menu exposes secondary navigation and projects", notes: "Tap More on a phone. Confirm Inbox, Home, Map, Completed, Templates, Settings, Ask TaskMap, project shortcuts, and sync/offline status are accessible without the desktop sidebar.", priority: "normal" },
+    { title: "Mobile Quick Add creates one or many tasks", notes: "Tap the center + button from multiple views. Confirm the Quick Add sheet opens without changing views, supports comma-delimited task creation, respects the current parent/project context, and closes after creation.", priority: "normal" },
+    { title: "Task Details becomes a full-screen mobile editor", notes: "Open a task on a phone. Confirm Task Details uses the full screen, all fields remain editable, field drag handles remain touchable, Notes/tag/repeat controls fit without horizontal clipping, and closing returns to the previous view.", priority: "normal" },
+    { title: "Touch task drag can reorder and create subtasks", notes: "On a touch device use the task row drag handle. In Manual sort drag between rows and confirm the insertion line/reorder. Drag onto the center of another task and confirm it becomes a subtask without needing native HTML drag events.", priority: "normal" },
+    { title: "Mobile Calendar day view is touch friendly", notes: "Open Calendar on a phone. Confirm Day view is readable, time labels and task blocks fit the screen, scheduled blocks can be moved/resized by touch, and dragging a scheduled block into Day Tasks unschedules it.", priority: "normal" },
+    { title: "Mobile Calendar schedules unscheduled tasks by touch", notes: "Use the grip on an unscheduled Day/Week Task and drag it onto the timeline. Confirm the target highlights and the task receives the selected day/time. Verify tasks without duration retain the placeholder-duration warning.", priority: "normal" },
+    { title: "Mobile weekly Calendar scrolls instead of compressing", notes: "Switch Calendar to 5-day and 7-day Week views on a phone. Confirm the shared Week Tasks strip remains usable and the week timeline scrolls horizontally with readable day columns.", priority: "normal" },
+    { title: "TaskMap PWA respects mobile safe areas and standalone layout", notes: "Install/open TaskMap as a PWA or emulate standalone display. Confirm the bottom nav, full-screen Task Details, sheets, and app content avoid device notches/home indicators and the TaskMap icon/manifest remain correct.", priority: "normal" },
+
+    // v1.1.1: mobile bug-fix / recovery / Quick Add release. Only these new checks are urgent.
+    { title: "Mobile task pills filter without opening Task Details", notes: "On a phone tap Parent, Project, and Tag pills on task cards. Confirm each changes only the corresponding filter and does not open Task Details.", priority: "urgent" },
+    { title: "Deleted tasks stay deleted after refresh", notes: "Delete a normal task and a QA checklist task, refresh/restart TaskMap, and confirm neither is recreated or returned to active views.", priority: "urgent" },
+    { title: "Settings Trash restores and permanently deletes tasks", notes: "Delete tasks, open Settings → Trash, restore one task, restore a hierarchy, bulk restore selected tasks, and permanently delete a task. Confirm permanently deleted tasks disappear from Trash.", priority: "urgent" },
+    { title: "Mobile More can create a new project", notes: "On a phone open More → Projects, create a new project, and confirm TaskMap opens the new project and it is immediately available to tasks.", priority: "urgent" },
+    { title: "Quick Add creates inline parent child hierarchies", notes: "Create `Cheese Types > Swiss, Parm, Cheddar` and confirm one parent with three sibling children. Then create `Cheese Types > Swiss > Parmesan > Cheddar` and confirm a four-level chain.", priority: "urgent" },
+    { title: "Quick Add can move back up hierarchy levels", notes: "Create `Dinner > Main > Steak << Dessert > Cake, Ice Cream` and confirm Main/Steak and Dessert/Cake/Ice Cream form the intended sibling branches. Verify < moves up one level and << moves up two.", priority: "urgent" },
+    { title: "Template Quick Add keeps current focus", notes: "While editing a template, select an existing template task and add one or more new tasks. Confirm the new tasks are created under the current context without automatically focusing the newly created row.", priority: "urgent" },
   ];
 
   // Seed atomically. V5 preserves existing QA progress and only adds checklist entries that do not already exist.
@@ -1018,14 +1125,16 @@ export async function seedQaChecklist() {
       await db.transactionChanges.add({ id: crypto.randomUUID(), transactionId: projectTxId, fieldName: "__entity__", oldValue: null, newValue: qa });
     }
 
-    const existingQaTasks = (await db.tasks.where("projectId").equals(qa!.id).toArray()).filter(task => !task.deletedAt);
+    const existingQaAll = await db.tasks.where("projectId").equals(qa!.id).toArray();
+    const existingQaTasks = existingQaAll.filter(task => !task.deletedAt);
     const desiredPriority = new Map(checklist.map(item => [item.title, item.priority ?? "normal"] as const));
     const priorityUpdates = existingQaTasks.filter(task => desiredPriority.has(task.title) && task.priority !== desiredPriority.get(task.title));
     if (priorityUpdates.length) {
       const priorityNow = nowIso();
       await db.tasks.bulkPut(priorityUpdates.map(task => ({ ...task, priority: desiredPriority.get(task.title)!, updatedAt: priorityNow, revision: task.revision + 1 })));
     }
-    const existingTitles = new Set(existingQaTasks.map(task => task.title));
+    // Deleted QA tasks intentionally remain deleted. A tombstoned checklist row must not be re-seeded on refresh.
+    const existingTitles = new Set(existingQaAll.map(task => task.title));
     const missing = checklist.filter(item => !existingTitles.has(item.title));
     if (!missing.length) return;
     const currentLast = await db.tasks.orderBy("manualOrder").last();
@@ -1046,7 +1155,7 @@ export async function seedQaChecklist() {
       dueDate: item.dueDate ?? null,
       dueTime: item.dueTime ?? null,
       manualOrder: baseOrder + (index + 1) * 1000,
-      createdAt: now, updatedAt: now, completedAt: null, deletedAt: null, revision: 1,
+      createdAt: now, updatedAt: now, completedAt: null, deletedAt: null, purgedAt: null, revision: 1,
       recurrence: item.recurrence ?? null, recurrenceSeriesId: item.recurrenceSeriesId ?? null, recurrenceOccurrence: item.recurrenceOccurrence ?? null,
     }));
 

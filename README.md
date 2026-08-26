@@ -67,6 +67,6 @@ Then open http://localhost:3000.
 
 Current task state is materialized in IndexedDB for fast reads. Committed user actions update that state and append immutable transactions with field-level old/new values. Recurrence rules remain compact and Calendar only expands the visible date. Templates are separate definitions that create fresh task IDs when used. Task Detail field layout is local UI preference state and does not alter task history.
 
-## TaskMap v1.1 — Mobile release
+## TaskMap v1.1.1 — Mobile fixes and recovery
 
-TaskMap v1.0 is the former v15.1 desktop/local-first checkpoint. v1.1 adds the responsive mobile shell: bottom navigation, mobile Quick Add, a full-screen Task Details experience, touch task reordering/nesting, touch calendar scheduling, responsive Day/Week calendar layouts, and PWA safe-area polish. Desktop behavior remains available at larger viewport widths.
+TaskMap v1.0 is the former v15.1 desktop/local-first checkpoint. v1.1 added the responsive mobile shell. v1.1.1 fixes mobile pill filtering and persistent deletion, adds Settings → Trash recovery, mobile project creation, and the Quick Add hierarchy syntax (`>`, `<`, `<<`, and commas). Template Quick Add also preserves the current template focus when adding new rows.

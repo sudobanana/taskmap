@@ -85,7 +85,7 @@ export default function TemplatesView({ projects, onUsed }: { projects: Project[
     const parentId = selectedNodeId;
     const made = titles.map(title=>newNode(title,parentId));
     patchEditing({nodes:[...editing.nodes,...made]});
-    setSelectedNodeId(made[0].templateNodeId);
+    // Keep the current template selection/focus stable when adding tasks.
     setQuickTitle("");
   }
 

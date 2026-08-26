@@ -849,3 +849,24 @@ nav { display: grid; gap: 4px; }
   .check-button { width: 38px; }
   .detail-row-fields.paired { grid-template-columns: 1fr; }
 }
+
+/* v1.1.1 mobile project creation + Trash */
+.mobile-project-heading { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.mobile-new-project-button { border:0; background:transparent; color:var(--primary); font-weight:800; display:inline-flex; align-items:center; gap:5px; min-height:36px; padding:4px 6px; }
+.mobile-project-create { display:grid; gap:8px; margin:8px 0 10px; padding:10px; border:1px solid var(--border); border-radius:10px; background:#fafaff; }
+.mobile-project-create input { width:100%; min-height:42px; border:1px solid var(--border); border-radius:8px; padding:8px 10px; font-size:16px; }
+.mobile-project-create > div { display:flex; gap:7px; flex-wrap:wrap; }
+.trash-card { margin-top:16px; }
+.trash-card-heading { display:flex !important; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; color:var(--text) !important; }
+.trash-card-heading > div:first-child { display:flex; align-items:center; gap:8px; color:var(--primary); }
+.trash-count { min-width:24px; height:24px; padding:0 7px; border-radius:999px; background:#f0f0ff; color:var(--primary); display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; }
+.trash-toolbar { display:flex; gap:7px; flex-wrap:wrap; }
+.trash-list { display:grid; gap:8px; margin-top:12px; }
+.trash-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:10px; border:1px solid #eceef3; border-radius:10px; padding:10px; background:#fbfbfd; }
+.trash-select input { width:17px; height:17px; }
+.trash-copy { min-width:0; }
+.trash-copy strong { display:block; overflow-wrap:anywhere; }
+.trash-copy > div { display:flex; gap:8px; flex-wrap:wrap; margin-top:4px; color:var(--muted); font-size:10px; }
+.trash-actions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+.trash-empty { padding:18px; border:1px dashed var(--border); border-radius:10px; color:var(--muted); text-align:center; margin-top:12px; }
+@media (max-width: 700px) { .trash-row { grid-template-columns:auto minmax(0,1fr); } .trash-actions { grid-column:2; justify-content:flex-start; } .trash-toolbar { width:100%; } }

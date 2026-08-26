@@ -19,6 +19,7 @@ import {
   Plus,
   Search,
   Settings as SettingsIcon,
+  RotateCcw,
   Sparkles,
   Sun,
   Wifi,
@@ -39,6 +40,8 @@ import {
   toggleTaskComplete,
   updateTask,
   changeTaskProject,
+  restoreTaskSet,
+  permanentlyDeleteTaskSet,
 } from "@/lib/task-service";
 import { taskMatchesRule, validateRule } from "@/lib/rule-service";
 import type { AssistantAction, Project, RecurrenceRule, Task, TaskCategory, TaskSortMode, TodayFilter } from "@/lib/types";
@@ -51,6 +54,7 @@ import AssistantPanel from "./AssistantPanel";
 import TemplatesView from "./TemplatesView";
 import { defaultRecurrenceRule, nextOccurrence, recurrenceLabel } from "@/lib/recurrence";
 import { APP_VERSION } from "@/lib/app-meta";
+import { parseQuickAddHierarchy } from "@/lib/quick-add";
 
 const nav = [
   ["home", "Home", Home],
@@ -158,7 +162,8 @@ export default function TaskMapApp() {
   const [mobileQuickAddOpen, setMobileQuickAddOpen] = useState(false);
   const taskPointerDragRef = useRef<{ id: string; targetId: string | null; mode: DropMode | null; projectId: string | null } | null>(null);
 
-  const tasks = useLiveQuery(() => db.tasks.filter(task => !task.deletedAt).toArray(), [], []);
+  const tasks = useLiveQuery(() => db.tasks.filter(task => !task.deletedAt && !task.purgedAt).toArray(), [], []);
+  const deletedTasks = useLiveQuery(() => db.tasks.filter(task => Boolean(task.deletedAt) && !task.purgedAt).toArray(), [], []);
   const projects = useLiveQuery(() => db.projects.orderBy("name").toArray(), [], []);
   const categories = useLiveQuery(() => db.taskCategories.orderBy("createdAt").toArray(), [], []);
   const pending = useLiveQuery(() => db.transactions.where("syncStatus").equals("pending").count(), [], 0);
@@ -236,19 +241,25 @@ export default function TaskMapApp() {
   const selectedProject = projects.find(project => project.id === selectedProjectId) ?? null;
 
   async function addQuickTask() {
-    const titles = quickTitle.split(",").map(title => title.trim()).filter(Boolean);
-    if (!titles.length) return;
+    const plan = parseQuickAddHierarchy(quickTitle);
+    if (!plan.length) return;
     const created: Task[] = [];
+    const groupId = crypto.randomUUID();
     const currentFirstOrder = tasks.length ? Math.min(...tasks.map(task => task.manualOrder)) : 1000;
-    const firstNewOrder = currentFirstOrder - titles.length * 1000;
-    for (let index = 0; index < titles.length; index += 1) {
+    const firstNewOrder = currentFirstOrder - plan.length * 1000;
+    const contextProjectId = focusedParent ? focusedParent.projectId : selectedProjectId;
+
+    for (let index = 0; index < plan.length; index += 1) {
+      const node = plan[index];
+      const parentTaskId = node.parentIndex === null ? focusedParentId : created[node.parentIndex]?.id ?? focusedParentId;
+      const parent = parentTaskId ? (created.find(task => task.id === parentTaskId) ?? tasks.find(task => task.id === parentTaskId) ?? null) : null;
       created.push(await createTask({
-        title: titles[index],
-        projectId: focusedParent ? focusedParent.projectId : selectedProjectId,
-        parentTaskId: focusedParentId,
+        title: node.title,
+        projectId: parent?.projectId ?? contextProjectId,
+        parentTaskId,
         dueDate: view === "today" ? today : null,
         manualOrder: firstNewOrder + index * 1000,
-      }));
+      }, { groupId, actionType: "TASK_CREATED_QUICK_ADD" }));
     }
     setQuickTitle("");
     setMobileQuickAddOpen(false);
@@ -261,6 +272,7 @@ export default function TaskMapApp() {
     const project = await createProject(projectName, colors[projects.length % colors.length]);
     setProjectName("");
     setShowProjectForm(false);
+    setMobileMenuOpen(false);
     setFocusedParentId(null);
     setSelectedProjectId(project.id);
     setView("tasks");
@@ -619,7 +631,7 @@ export default function TaskMapApp() {
     else if (view === "map") items.push({ label: "Mind Map" });
     else if (view === "calendar") items.push({ label: "Calendar" });
     else if (view === "templates") items.push({ label: "Templates" });
-    else if (view === "settings") items.push({ label: "Settings" }, { label: "About" });
+    else if (view === "settings") items.push({ label: "Settings" });
     if (selected && view !== "settings" && view !== "templates") items.push({ label: selected.title });
     return items;
   }, [view, focusedParent?.id, focusedParent?.title, selectedTagFilter, selectedProject?.id, selectedProject?.name, selected?.id, selected?.title]);
@@ -674,7 +686,7 @@ export default function TaskMapApp() {
         <div className="main-breadcrumb" aria-label="Breadcrumb">{breadcrumbItems.map((item,index)=><span key={`${item.label}-${index}`} className="breadcrumb-part">{index>0&&<b>›</b>}{item.action?<button onClick={item.action}>{item.label}</button>:<span>{item.label}</span>}</span>)}</div>
 
         {view === "settings" ? (
-          <SettingsView />
+          <SettingsView deletedTasks={deletedTasks} allTasks={[...tasks, ...deletedTasks]} projects={projects} />
         ) : view === "map" ? (
           <MindMapView tasks={tasks} projects={projects} onSelect={setSelectedId} />
         ) : view === "calendar" ? (
@@ -733,7 +745,7 @@ export default function TaskMapApp() {
                   </label>
                 </div>
               </div>
-              {view !== "completed" && <div className="quick-add"><Plus size={18} /><input id="quick-task" value={quickTitle} onChange={event => setQuickTitle(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addQuickTask(); }} placeholder={focusedParent ? `Add subtask(s) under ${focusedParent.title} — commas supported` : "Add task(s) — separate multiple with commas"} /></div>}
+              {view !== "completed" && <div className="quick-add"><Plus size={18} /><input id="quick-task" value={quickTitle} onChange={event => setQuickTitle(event.target.value)} onKeyDown={event => { if (event.key === "Enter") addQuickTask(); }} placeholder={focusedParent ? `Add under ${focusedParent.title} — use >, <, << and commas` : "Add tasks — use > for child, < to go up, commas for siblings"} /></div>}
               <div className="task-list">
                 {displayEntries.length === 0 ? <div className="empty-state">No tasks match this view.</div> : displayEntries.map(({ task, depth }, index) => {
                   const recurringUi = recurringUiForTask(task);
@@ -822,7 +834,7 @@ export default function TaskMapApp() {
           <button className={view==="settings"?"active":""} onClick={() => handleNav("settings")}><SettingsIcon size={19}/><span>Settings</span></button>
           <button onClick={() => { setMobileMenuOpen(false); setAssistantOpen(true); }}><Sparkles size={19}/><span>Ask TaskMap</span></button>
         </div>
-        <div className="mobile-sheet-section"><span>Projects</span><div className="mobile-project-list"><button className={!selectedProjectId?"active":""} onClick={() => { setMobileMenuOpen(false); openProject(null); }}><span className="project-dot" style={{background:"#9CA3AF"}}/>All projects</button>{projects.map(project=><button key={project.id} className={selectedProjectId===project.id?"active":""} onClick={() => { setMobileMenuOpen(false); openProject(project.id); }}><span className="project-dot" style={{background:project.color}}/><span>{project.name}</span><small>{tasks.filter(task=>task.projectId===project.id&&task.status!=="done").length}</small></button>)}</div></div>
+        <div className="mobile-sheet-section"><div className="mobile-project-heading"><span>Projects</span><button className="mobile-new-project-button" onClick={() => setShowProjectForm(true)}><Plus size={15}/> New Project</button></div>{showProjectForm&&<div className="mobile-project-create"><input autoFocus value={projectName} onChange={event=>setProjectName(event.target.value)} onKeyDown={event=>{if(event.key==="Enter")void addProject();if(event.key==="Escape")setShowProjectForm(false);}} placeholder="Project name"/><div><button className="primary-button compact" disabled={!projectName.trim()} onClick={()=>void addProject()}>Create</button><button className="ghost-button compact" onClick={()=>{setShowProjectForm(false);setProjectName("");}}>Cancel</button></div></div>}<div className="mobile-project-list"><button className={!selectedProjectId?"active":""} onClick={() => { setMobileMenuOpen(false); openProject(null); }}><span className="project-dot" style={{background:"#9CA3AF"}}/>All projects</button>{projects.map(project=><button key={project.id} className={selectedProjectId===project.id?"active":""} onClick={() => { setMobileMenuOpen(false); openProject(project.id); }}><span className="project-dot" style={{background:project.color}}/><span>{project.name}</span><small>{tasks.filter(task=>task.projectId===project.id&&task.status!=="done").length}</small></button>)}</div></div>
         <div className={online?"mobile-sync-status":"mobile-sync-status offline"}>{online?<Wifi size={15}/>:<CloudOff size={15}/>}<span>{online?`${pending} local change${pending===1?"":"s"}`:`Offline · ${pending} pending`}</span></div>
       </section></div>}
 
@@ -830,7 +842,7 @@ export default function TaskMapApp() {
         <div className="mobile-sheet-handle" />
         <div className="mobile-sheet-heading"><div><strong>Quick Add</strong><span>{focusedParent ? `Subtasks under ${focusedParent.title}` : selectedProject ? selectedProject.name : "New task"}</span></div><button onClick={() => setMobileQuickAddOpen(false)} aria-label="Close quick add"><X size={20}/></button></div>
         <label className="mobile-quick-add-input"><Plus size={20}/><input autoFocus value={quickTitle} onChange={event => setQuickTitle(event.target.value)} onKeyDown={event => { if(event.key==="Enter") void addQuickTask(); }} placeholder="Task one, Task two, Task three" /></label>
-        <p>Separate multiple tasks with commas.</p>
+        <p>Use <strong>&gt;</strong> for a child, <strong>&lt;</strong> to move up a level, <strong>&lt;&lt;</strong> to move up two levels, and commas for siblings.</p>
         <button className="primary-button mobile-create-task" disabled={!quickTitle.trim()} onClick={() => void addQuickTask()}>Create task{quickTitle.includes(",")?"s":""}</button>
       </section></div>}
 
@@ -846,13 +858,45 @@ export default function TaskMapApp() {
 }
 
 
-function SettingsView() {
+function SettingsView({ deletedTasks, allTasks, projects }: { deletedTasks: Task[]; allTasks: Task[]; projects: Project[] }) {
+  const [selectedTrash, setSelectedTrash] = useState<Set<string>>(new Set());
+  const byId = useMemo(() => new Map(allTasks.map(task => [task.id, task])), [allTasks]);
+  const projectById = useMemo(() => new Map(projects.map(project => [project.id, project])), [projects]);
+  const sortedTrash = useMemo(() => [...deletedTasks].sort((a,b) => String(b.deletedAt).localeCompare(String(a.deletedAt))), [deletedTasks]);
+  const allSelected = Boolean(sortedTrash.length) && sortedTrash.every(task => selectedTrash.has(task.id));
+
+  function toggleTrash(id: string) {
+    setSelectedTrash(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  }
+
+  async function restore(ids: string[], hierarchy = false) {
+    await restoreTaskSet(ids, hierarchy);
+    setSelectedTrash(current => { const next = new Set(current); ids.forEach(id => next.delete(id)); return next; });
+  }
+
+  async function purge(ids: string[]) {
+    if (!ids.length) return;
+    if (!window.confirm(`Permanently delete ${ids.length === 1 ? "this task" : `${ids.length} tasks`}? This cannot be restored from Trash.`)) return;
+    await permanentlyDeleteTaskSet(ids);
+    setSelectedTrash(current => { const next = new Set(current); ids.forEach(id => next.delete(id)); return next; });
+  }
+
   return <section className="content settings-page">
-    <div className="page-heading"><div><p className="eyebrow">Application settings</p><h1>Settings</h1><p className="subtitle">Configure TaskMap and review build information.</p></div></div>
+    <div className="page-heading"><div><p className="eyebrow">Application settings</p><h1>Settings</h1><p className="subtitle">Configure TaskMap, recover deleted work, and review build information.</p></div></div>
     <div className="settings-grid">
       <section className="settings-card"><div><SettingsIcon size={18}/><h2>General</h2></div><p>TaskMap settings will live here as app-wide preferences are added.</p><div className="settings-row"><span>Offline-first storage</span><strong>Enabled</strong></div><div className="settings-row"><span>AI environment variable</span><code>OPENAI_API_KEY</code></div></section>
       <section className="settings-card about-card"><div><GitBranch size={18}/><h2>About</h2></div><p>TaskMap local-first task planning and mind-map workspace.</p><div className="about-version"><span>Version</span><strong>TaskMap v{APP_VERSION}</strong></div><small>Build version is sourced from one shared application constant.</small></section>
     </div>
+    <section className="settings-card trash-card">
+      <div className="trash-card-heading"><div><Trash2 size={18}/><h2>Trash</h2><span className="trash-count">{sortedTrash.length}</span></div>{sortedTrash.length>0&&<div className="trash-toolbar"><button className="ghost-button compact" onClick={()=>setSelectedTrash(allSelected?new Set():new Set(sortedTrash.map(task=>task.id)))}>{allSelected?"Clear all":"Select all"}</button><button className="ghost-button compact" disabled={!selectedTrash.size} onClick={()=>void restore([...selectedTrash])}><RotateCcw size={13}/> Restore Selected</button><button className="danger-button compact" disabled={!selectedTrash.size} onClick={()=>void purge([...selectedTrash])}><Trash2 size={13}/> Delete Permanently</button></div>}</div>
+      <p>Deleted tasks stay here until you explicitly restore or permanently delete them.</p>
+      {sortedTrash.length===0?<div className="trash-empty">Trash is empty.</div>:<div className="trash-list">{sortedTrash.map(task=>{
+        const parent = task.parentTaskId ? byId.get(task.parentTaskId) ?? null : null;
+        const project = task.projectId ? projectById.get(task.projectId) ?? null : null;
+        const deletedRelatives = Boolean((parent?.deletedAt && !parent.purgedAt) || allTasks.some(candidate => candidate.parentTaskId === task.id && candidate.deletedAt && !candidate.purgedAt));
+        return <div key={task.id} className="trash-row"><label className="trash-select"><input type="checkbox" checked={selectedTrash.has(task.id)} onChange={()=>toggleTrash(task.id)}/></label><div className="trash-copy"><strong>{task.title}</strong><div>{project&&<span>Project: {project.name}</span>}{parent&&<span>Parent: {parent.title}{parent.deletedAt?" (in Trash)":""}</span>}<span>Deleted {task.deletedAt?new Date(task.deletedAt).toLocaleString():""}</span></div></div><div className="trash-actions"><button className="ghost-button compact" onClick={()=>void restore([task.id])}><RotateCcw size={13}/> Restore</button>{deletedRelatives&&<button className="ghost-button compact" onClick={()=>void restore([task.id],true)}>Restore hierarchy</button>}<button className="icon-danger" title="Delete permanently" onClick={()=>void purge([task.id])}><Trash2 size={15}/></button></div></div>;
+      })}</div>}
+    </section>
   </section>;
 }
 
@@ -931,9 +975,9 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
         <strong className={visuallyDone ? "done" : ""}>{task.title}</strong>
         <div className="task-meta">{task.startTime && <span>{formatTime(task.startTime)}</span>}{task.estimatedMinutes != null && <span>{formatDuration(task.estimatedMinutes)}</span>}{task.dueDate && <span>Due {task.dueDate === localDateOnly() ? "today" : task.dueDate}</span>}{task.status === "done" && task.completedAt && <span>Completed {new Date(task.completedAt).toLocaleDateString()}</span>}{task.recurrence?.enabled && <span className="repeat-badge"><Repeat2 size={11}/> {recurrenceLabel(task.recurrence)}</span>}{recurringState === "completed" && <span className="recurring-transition-badge completed">✓ Completed · {nextOccurrenceLabel === "Series complete" ? "Series complete" : `Next ${nextOccurrenceLabel}`}</span>}{recurringState === "next" && <span className="recurring-transition-badge next"><Repeat2 size={11}/> Next occurrence{checkboxProtected ? " · checkbox protected" : ""}</span>}</div>
         {(project || parent || (task.tags ?? []).length > 0) && <div className="task-tags">
-          {project && <button className="task-tag project-tag" onClick={event => { event.stopPropagation(); onProjectClick(project.id); }}>Project: {project.name}</button>}
-          {parent && <button className="task-tag parent-tag" onClick={event => { event.stopPropagation(); onParentClick(parent.id); }}>Parent: {parent.title}</button>}
-          {(task.tags ?? []).map((tag, tagIndex) => <button key={`${tag}-${tagIndex}`} className="task-tag label-tag" onClick={event => { event.stopPropagation(); onTagClick(tag); }}>Tag: {tag}</button>)}
+          {project && <button className="task-tag project-tag" onPointerDown={event => event.stopPropagation()} onClick={event => { event.preventDefault(); event.stopPropagation(); onProjectClick(project.id); }}>Project: {project.name}</button>}
+          {parent && <button className="task-tag parent-tag" onPointerDown={event => event.stopPropagation()} onClick={event => { event.preventDefault(); event.stopPropagation(); onParentClick(parent.id); }}>Parent: {parent.title}</button>}
+          {(task.tags ?? []).map((tag, tagIndex) => <button key={`${tag}-${tagIndex}`} className="task-tag label-tag" onPointerDown={event => event.stopPropagation()} onClick={event => { event.preventDefault(); event.stopPropagation(); onTagClick(tag); }}>Tag: {tag}</button>)}
         </div>}
       </div>
       {manual && <div className="order-buttons"><button disabled={isFirst} title="Move up" onClick={event => { event.stopPropagation(); onMove(-1); }}>↑</button><button disabled={isLast} title="Move down" onClick={event => { event.stopPropagation(); onMove(1); }}>↓</button></div>}
