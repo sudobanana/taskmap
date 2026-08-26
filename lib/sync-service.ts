@@ -83,7 +83,7 @@ async function applyRemoteEntity(remote: RemoteEntity) {
 }
 
 async function applyRemote(response: SyncResponse) {
-  await db.transaction("rw", db.tasks, db.projects, db.taskCategories, db.taskLayouts, db.devBacklog, db.taskTemplates, async () => {
+  await db.transaction("rw", [db.tasks, db.projects, db.taskCategories, db.taskLayouts, db.devBacklog, db.taskTemplates], async () => {
     for (const remote of response.entities) await applyRemoteEntity(remote);
   });
   const transactions: Transaction[] = response.transactions.map(row => ({

@@ -1,8 +1,8 @@
-# TaskMap v1.3.1
+# TaskMap v1.3.2
 
 TaskMap is a local-first task planner built with Next.js, React, TypeScript, Dexie/IndexedDB, React Flow, Supabase, and an optional OpenAI-powered **Ask TaskMap** assistant.
 
-## v1.3.1 build fix
+## v1.3.2 build fix
 
 - Fixed the Dexie multi-table workspace-clone transaction to use the array form supported by Dexie's TypeScript overloads.
 - No Sync Workspace behavior changed.
