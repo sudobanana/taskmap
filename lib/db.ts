@@ -264,7 +264,16 @@ export async function cloneActiveDatabaseToWorkspace(workspaceId: string) {
     db.tasks.toArray(), db.projects.toArray(), db.taskCategories.toArray(), db.taskLayouts.toArray(),
     db.transactions.toArray(), db.transactionChanges.toArray(), db.devBacklog.toArray(), db.taskTemplates.toArray(),
   ]);
-  await target.transaction("rw", target.tasks, target.projects, target.taskCategories, target.taskLayouts, target.transactions, target.transactionChanges, target.devBacklog, target.taskTemplates, async () => {
+  await target.transaction("rw", [
+    target.tasks,
+    target.projects,
+    target.taskCategories,
+    target.taskLayouts,
+    target.transactions,
+    target.transactionChanges,
+    target.devBacklog,
+    target.taskTemplates,
+  ], async () => {
     await Promise.all([target.tasks.clear(), target.projects.clear(), target.taskCategories.clear(), target.taskLayouts.clear(), target.transactions.clear(), target.transactionChanges.clear(), target.devBacklog.clear(), target.taskTemplates.clear()]);
     if (tasks.length) await target.tasks.bulkPut(tasks);
     if (projects.length) await target.projects.bulkPut(projects);
