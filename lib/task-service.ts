@@ -896,7 +896,7 @@ export async function seedQaChecklist() {
     // V9: newest asks and bug fixes stay urgent for focused validation.
     { title: "Bulk delete has Select All for the visible filtered tasks", notes: "Enter Select mode in Tasks, Today, Inbox, or Completed. Click Select all and confirm every currently visible task is selected without selecting hidden tasks outside the current filter/search.", priority: "normal" },
     { title: "Settings appears below Offline status", notes: "Confirm a Settings button appears in the lower-left sidebar directly below the offline/sync status area.", priority: "normal" },
-    { title: "Settings About shows the current TaskMap version", notes: "Open Settings and confirm About displays TaskMap v0.12.0 from the shared app version source.", priority: "normal" },
+    { title: "Settings About shows the current TaskMap version", notes: "Open Settings and confirm About displays TaskMap v0.13.0 from the shared app version source.", priority: "normal" },
     { title: "Every Task Details row supports field dragging", notes: "Drag fields from the first, middle, and lower rows by their labels. Confirm all fields can move and all destination rows accept drops.", priority: "normal" },
     { title: "Untitled Task Details actions can be reordered", notes: "Drag Show this task + all subtasks and Save task + subtasks as a template using their small handle icons. Confirm neither action needs a visible field title.", priority: "normal" },
     { title: "Tasks pane owns its scrollbar while Task Details is open", notes: "Open Task Details on a wide screen and scroll the Tasks list. Confirm the scrollbar is directly on the right edge of the Tasks pane rather than at the far-right edge of the window.", priority: "normal" },
@@ -914,7 +914,10 @@ export async function seedQaChecklist() {
     { title: "Calendar warns when a scheduled task has no real duration", notes: "Drag an unscheduled task with no estimated duration onto Calendar. Confirm the block shows a warning icon and explains that the displayed length is a placeholder. Resize it to set a duration and confirm the warning disappears.", priority: "normal" },
 
     // V12: Task Details editing regression fix is the newest urgent validation target.
-    { title: "Task Details fields remain editable after drag-layout changes", notes: "Open Task Details, rearrange a field from a lower row, then edit Status, Priority, Project, Parent, Duration, dates/times, Tags, Repeat, and Notes. Confirm only the field label/drag handle starts a drag and every editor remains clickable and editable.", priority: "urgent" },
+    { title: "Task Details fields remain editable after drag-layout changes", notes: "Open Task Details, rearrange a field from a lower row, then edit Status, Priority, Project, Parent, Duration, dates/times, Tags, Repeat, and Notes. Confirm only the field label/drag handle starts a drag and every editor remains clickable and editable.", priority: "normal" },
+
+    // V13: replace native HTML drag with pointer-driven field reordering.
+    { title: "Task Details pointer drag works from every row", notes: "Open Task Details and drag a field from the third or later row by its title/handle. Confirm the field immediately gets the dragging-field class, destination highlights follow the pointer across upper/lower rows, dropping moves the field, inputs remain editable, and the layout persists after refresh.", priority: "urgent" },
   ];
 
   // Seed atomically. V5 preserves existing QA progress and only adds checklist entries that do not already exist.

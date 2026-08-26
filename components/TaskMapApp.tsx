@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   CalendarDays,
@@ -1148,7 +1148,7 @@ function moveInspectorField(rows: InspectorFieldKey[][], field: InspectorFieldKe
   return next;
 }
 
-function DraggableInspectorField({ fieldKey, label, singleRow, dragging, onDragStart, onDragEnd, children }: { fieldKey: InspectorFieldKey; label: string; singleRow: boolean; dragging: boolean; onDragStart:(key:InspectorFieldKey)=>void; onDragEnd:()=>void; children:ReactNode }) {
+function DraggableInspectorField({ fieldKey, label, singleRow, dragging, onPointerStart, onPointerMove, onPointerEnd, children }: { fieldKey: InspectorFieldKey; label: string; singleRow: boolean; dragging: boolean; onPointerStart:(key:InspectorFieldKey,event:ReactPointerEvent<HTMLSpanElement>)=>void; onPointerMove:(key:InspectorFieldKey,event:ReactPointerEvent<HTMLSpanElement>)=>void; onPointerEnd:(key:InspectorFieldKey,event:ReactPointerEvent<HTMLSpanElement>)=>void; children:ReactNode }) {
   const untitled = !label;
   return <div
     className={`detail-field draggable-detail-field ${singleRow?"span-two":""} ${dragging?"dragging-field":""} ${untitled?"untitled-action-field":""}`}
@@ -1157,26 +1157,37 @@ function DraggableInspectorField({ fieldKey, label, singleRow, dragging, onDragS
     <span
       className={`detail-field-drag-label ${untitled?"untitled-action-handle":""}`}
       data-inspector-drag-handle="true"
-      draggable
-      onDragStart={event=>{
+      onPointerDown={event=>{
+        if(event.button!==0)return;
+        event.preventDefault();
         event.stopPropagation();
-        event.dataTransfer.effectAllowed="move";
-        event.dataTransfer.setData("text/plain",fieldKey);
-        onDragStart(fieldKey);
+        event.currentTarget.setPointerCapture(event.pointerId);
+        onPointerStart(fieldKey,event);
       }}
-      onDragEnd={event=>{
-        event.stopPropagation();
-        onDragEnd();
+      onPointerMove={event=>{
+        if(!event.currentTarget.hasPointerCapture(event.pointerId))return;
+        event.preventDefault();
+        onPointerMove(fieldKey,event);
       }}
-      aria-label={untitled?"Drag action to reposition":undefined}
+      onPointerUp={event=>{
+        if(!event.currentTarget.hasPointerCapture(event.pointerId))return;
+        event.preventDefault();
+        onPointerEnd(fieldKey,event);
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }}
+      onPointerCancel={event=>{
+        if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);
+        onPointerEnd(fieldKey,event);
+      }}
+      aria-label={untitled?"Drag action to reposition":`${label} — drag to reposition`}
       title={untitled?"Drag to reposition action":"Drag to reposition field"}
     ><b>⋮⋮</b>{label&&<span>{label}</span>}</span>
     {children}
   </div>;
 }
 
-function InspectorDropZone({ active, className, label, onHover, onDrop }: { active:boolean; className:string; label:string; onHover:()=>void; onDrop:()=>void }) {
-  return <div className={`${className} ${active?"active":""}`} aria-label={label} onDragEnter={event=>{event.preventDefault();onHover();}} onDragOver={event=>{event.preventDefault();event.dataTransfer.dropEffect="move";onHover();}} onDrop={event=>{event.preventDefault();onDrop();}}><span>{label}</span></div>;
+function InspectorDropZone({ active, className, label }: { active:boolean; className:string; label:string }) {
+  return <div className={`${className} ${active?"active":""}`} aria-label={label}><span>{label}</span></div>;
 }
 
 function TaskInspector({ task, tasks, projects, onClose, onOpenTask, onFocusParent, onTagClick, onRequestDelete, onToggleTask, onProjectChange }: { task: Task; tasks: Task[]; projects: Project[]; onClose: () => void; onOpenTask: (id: string) => void; onFocusParent: (id: string) => void; onTagClick: (tag: string) => void; onRequestDelete: () => void; onToggleTask: () => void; onProjectChange: (taskId: string, projectId: string | null) => Promise<void> }) {
@@ -1186,6 +1197,8 @@ function TaskInspector({ task, tasks, projects, onClose, onOpenTask, onFocusPare
   const [fieldRows,setFieldRows] = useState<InspectorFieldKey[][]>(()=>defaultInspectorFieldRows.map(row=>[...row]));
   const [draggingField,setDraggingField] = useState<InspectorFieldKey|null>(null);
   const [fieldDropTarget,setFieldDropTarget] = useState<InspectorDropTarget|null>(null);
+  const draggingFieldRef=useRef<InspectorFieldKey|null>(null);
+  const fieldDropTargetRef=useRef<InspectorDropTarget|null>(null);
   useEffect(()=>{
     try {
       const rowRaw=localStorage.getItem("taskmap.inspectorFieldRows.v2");
@@ -1194,15 +1207,67 @@ function TaskInspector({ task, tasks, projects, onClose, onOpenTask, onFocusPare
       else if(legacyRaw) setFieldRows(normalizeInspectorRows(JSON.parse(legacyRaw)));
     } catch {}
   },[]);
-  function commitFieldDrop(target:InspectorDropTarget) {
-    if(!draggingField){setFieldDropTarget(null);return;}
-    setFieldRows(current=>{
-      const next=moveInspectorField(current,draggingField,target);
-      try{localStorage.setItem("taskmap.inspectorFieldRows.v2",JSON.stringify(next));}catch{}
-      return next;
-    });
+  function setInspectorDropTarget(target:InspectorDropTarget|null){
+    fieldDropTargetRef.current=target;
+    setFieldDropTarget(target);
+  }
+  function beginInspectorPointerDrag(field:InspectorFieldKey){
+    draggingFieldRef.current=field;
+    setDraggingField(field);
+    setInspectorDropTarget(null);
+  }
+  function updateInspectorPointerDrag(field:InspectorFieldKey,clientX:number,clientY:number){
+    if(draggingFieldRef.current!==field)return;
+    const grid=document.querySelector<HTMLElement>(".inspector .draggable-detail-grid");
+    if(!grid){setInspectorDropTarget(null);return;}
+    const inspector=grid.closest<HTMLElement>(".inspector");
+    if(inspector){
+      const inspectorRect=inspector.getBoundingClientRect();
+      const edge=48;
+      if(clientY<inspectorRect.top+edge) inspector.scrollTop-=18;
+      else if(clientY>inspectorRect.bottom-edge) inspector.scrollTop+=18;
+    }
+    const rowEls=Array.from(grid.querySelectorAll<HTMLElement>("[data-inspector-row-index]"));
+    if(!rowEls.length){setInspectorDropTarget(null);return;}
+    const contentRect=(el:HTMLElement)=>(el.querySelector<HTMLElement>(".detail-row-fields")??el).getBoundingClientRect();
+    let rowEl:HTMLElement|undefined=rowEls.find(el=>{const r=contentRect(el);return clientY>=r.top&&clientY<=r.bottom;});
+    if(!rowEl){
+      rowEl=rowEls.reduce((best,el)=>{
+        const r=contentRect(el);
+        const distance=clientY<r.top?r.top-clientY:clientY>r.bottom?clientY-r.bottom:0;
+        const br=contentRect(best);
+        const bestDistance=clientY<br.top?br.top-clientY:clientY>br.bottom?clientY-br.bottom:0;
+        return distance<bestDistance?el:best;
+      },rowEls[0]);
+    }
+    const rowIndex=Number(rowEl.dataset.inspectorRowIndex);
+    const sourceRow=fieldRows[rowIndex];
+    if(!sourceRow){setInspectorDropTarget(null);return;}
+    const remaining=sourceRow.filter(key=>key!==field);
+    if(!remaining.length){setInspectorDropTarget(null);return;}
+    const anchor=remaining[0];
+    const rect=contentRect(rowEl);
+    const edgeBand=Math.min(28,Math.max(12,rect.height*.22));
+    let target:InspectorDropTarget;
+    if(clientY<=rect.top+edgeBand) target={anchor,mode:"before"};
+    else if(clientY>=rect.bottom-edgeBand) target={anchor,mode:"after"};
+    else if(remaining.length===1) target={anchor,mode:clientX<rect.left+rect.width/2?"left":"right"};
+    else target={anchor,mode:clientY<rect.top+rect.height/2?"before":"after"};
+    setInspectorDropTarget(target);
+  }
+  function commitInspectorPointerDrag(field:InspectorFieldKey){
+    const active=draggingFieldRef.current;
+    const target=fieldDropTargetRef.current;
+    if(active===field&&target){
+      setFieldRows(current=>{
+        const next=moveInspectorField(current,field,target);
+        try{localStorage.setItem("taskmap.inspectorFieldRows.v2",JSON.stringify(next));}catch{}
+        return next;
+      });
+    }
+    draggingFieldRef.current=null;
     setDraggingField(null);
-    setFieldDropTarget(null);
+    setInspectorDropTarget(null);
   }
 
   const fields: Record<InspectorFieldKey,{label:string;content:ReactNode}> = {
@@ -1227,21 +1292,20 @@ function TaskInspector({ task, tasks, projects, onClose, onOpenTask, onFocusPare
     <div className="title-field"><BufferedInput className="title-input" value={task.title} onCommit={value => updateTask(task.id, { title: value.trim() || task.title }, "TASK_TITLE_CHANGED")} /></div>
     <div className="detail-grid draggable-detail-grid">
       {fieldRows.map((row,rowIndex)=>{
-        const anchor=row.find(key=>key!==draggingField) ?? row[0];
-        const beforeTarget:InspectorDropTarget={anchor,mode:"before"};
-        const afterTarget:InspectorDropTarget={anchor,mode:"after"};
-        const canDropAround=Boolean(draggingField && !(row.length===1 && row[0]===draggingField));
-        const showPairZones=Boolean(draggingField && row.length===1 && row[0]!==draggingField);
-        return <div className="detail-layout-row" key={`${row.join("-")}-${rowIndex}`}>
-          {canDropAround && <InspectorDropZone className="detail-row-drop-zone before" label="Place on its own row here" active={fieldDropTarget?.anchor===anchor&&fieldDropTarget.mode==="before"} onHover={()=>setFieldDropTarget(beforeTarget)} onDrop={()=>commitFieldDrop(beforeTarget)} />}
+        const remaining=row.filter(key=>key!==draggingField);
+        const anchor=remaining[0] ?? row[0];
+        const canDropAround=Boolean(draggingField && remaining.length>0);
+        const showPairZones=Boolean(draggingField && remaining.length===1);
+        return <div className="detail-layout-row" data-inspector-row-index={rowIndex} key={`${row.join("-")}-${rowIndex}`}>
+          {canDropAround && <InspectorDropZone className="detail-row-drop-zone before" label="Place on its own row here" active={fieldDropTarget?.anchor===anchor&&fieldDropTarget.mode==="before"} />}
           <div className={`detail-row-fields ${row.length===1?"single":"paired"}`}>
-            {row.map(key=><DraggableInspectorField key={key} fieldKey={key} label={fields[key].label} singleRow={row.length===1} dragging={draggingField===key} onDragStart={key=>{setDraggingField(key);setFieldDropTarget(null);}} onDragEnd={()=>{setDraggingField(null);setFieldDropTarget(null);}}>{fields[key].content}</DraggableInspectorField>)}
+            {row.map(key=><DraggableInspectorField key={key} fieldKey={key} label={fields[key].label} singleRow={row.length===1} dragging={draggingField===key} onPointerStart={(key)=>beginInspectorPointerDrag(key)} onPointerMove={(key,event)=>updateInspectorPointerDrag(key,event.clientX,event.clientY)} onPointerEnd={(key)=>commitInspectorPointerDrag(key)}>{fields[key].content}</DraggableInspectorField>)}
             {showPairZones && <>
-              <InspectorDropZone className="detail-pair-drop-zone left" label="Place in left column" active={fieldDropTarget?.anchor===anchor&&fieldDropTarget.mode==="left"} onHover={()=>setFieldDropTarget({anchor,mode:"left"})} onDrop={()=>commitFieldDrop({anchor,mode:"left"})} />
-              <InspectorDropZone className="detail-pair-drop-zone right" label="Place in right column" active={fieldDropTarget?.anchor===anchor&&fieldDropTarget.mode==="right"} onHover={()=>setFieldDropTarget({anchor,mode:"right"})} onDrop={()=>commitFieldDrop({anchor,mode:"right"})} />
+              <InspectorDropZone className="detail-pair-drop-zone left" label="Place in left column" active={fieldDropTarget?.anchor===anchor&&fieldDropTarget.mode==="left"} />
+              <InspectorDropZone className="detail-pair-drop-zone right" label="Place in right column" active={fieldDropTarget?.anchor===anchor&&fieldDropTarget.mode==="right"} />
             </>}
           </div>
-          {canDropAround && <InspectorDropZone className="detail-row-drop-zone after" label="Place on its own row here" active={fieldDropTarget?.anchor===anchor&&fieldDropTarget.mode==="after"} onHover={()=>setFieldDropTarget(afterTarget)} onDrop={()=>commitFieldDrop(afterTarget)} />}
+          {canDropAround && <InspectorDropZone className="detail-row-drop-zone after" label="Place on its own row here" active={fieldDropTarget?.anchor===anchor&&fieldDropTarget.mode==="after"} />}
         </div>;
       })}
     </div>

@@ -1,19 +1,22 @@
-# TaskMap QA rebuild v12
+# TaskMap QA rebuild v13
 
 A local-first TaskMap prototype using Next.js, React, TypeScript, Dexie/IndexedDB, React Flow, and an optional OpenAI-powered **Ask TaskMap** assistant.
 
-## V12 data behavior
+## V13 data behavior
 
-- IndexedDB schema **v8 preserves existing QA progress**.
-- Existing QA checks are demoted to Normal; only the newest v12 regression check seeds as **Urgent**.
+- IndexedDB schema **v9 preserves existing QA progress**.
+- Existing QA checks are demoted to Normal; only the newest v13 regression check seeds as **Urgent**.
 - Task deletion remains soft/tombstoned and writes normal transaction history.
 - Recurring tasks continue to keep one active materialized occurrence while Calendar projects future occurrences virtually.
 
-## New in v12
+## New in v13
 
-- Task Details inputs are editable again: only field labels/drag handles initiate dragging.
-- Lower-row field dragging remains supported, including untitled action blocks via their dedicated handles.
-- QA specifically validates editing every Task Details field after rearranging the layout.
+- Replaced Task Details field reordering's native HTML5 `draggable` lifecycle with pointer-driven dragging.
+- Any field row can enter the drag state immediately from its title/handle, including lower rows and untitled action blocks.
+- Destination detection follows the pointer across upper/lower rows and highlights own-row or left/right placement.
+- Dragging near the top or bottom edge auto-scrolls Task Details.
+- Editors remain independent from dragging because only the field title/handle captures the pointer.
+- QA specifically checks that a third-or-later-row field receives the `dragging-field` state, moves, persists, and remains editable afterward.
 
 ## Previous feature set
 

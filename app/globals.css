@@ -598,3 +598,8 @@ nav { display: grid; gap: 4px; }
 .project-change-modal-icon { background: #efefff; color: var(--primary); }
 .calendar-block strong { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .calendar-duration-warning { display: inline-flex !important; align-items: center; justify-content: center; flex: 0 0 auto; opacity: 1 !important; color: #a86c00; background: #fff3cf; border: 1px solid #f0cf76; border-radius: 999px; padding: 2px 4px; }
+
+/* V13 Task Details pointer-driven layout reordering. */
+.detail-field-drag-label { touch-action: none; }
+.dragging-field .detail-field-drag-label { cursor: grabbing; }
+.detail-row-drop-zone, .detail-pair-drop-zone { pointer-events: none; }
