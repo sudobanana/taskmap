@@ -118,3 +118,14 @@ TaskMap v1.3 replaces mandatory Supabase Auth for normal sync with explicit, key
 - Creating a workspace can clone the currently active IndexedDB database. Joining an existing workspace starts from an isolated local database and pulls the remote projection.
 - Devices sync after local writes, on reconnect/focus, and periodically while visible. This avoids requiring an authenticated Realtime subscription for key-only workspaces.
 - Recovery email is optional. Its normalized SHA-256 hash is stored server-side; the plaintext address is not needed for workspace lookup. Verification/recovery uses a Supabase magic-link session and can mint a replacement workspace key.
+
+
+## v1.5 REST API and project lifecycle
+
+- `/api/taskmap/openapi.json` describes separate REST operations for GPT Actions while legacy `POST /api/taskmap` remains backward compatible.
+- REST endpoints proxy into the existing transaction-aware cloud API; project deletion uses a small dedicated authenticated Edge Function so the stable API broker does not need an unrelated redeploy.
+- External API keys remain workspace-scoped, individually revocable, and separate from Sync Keys.
+- Project rename is a normal project entity transaction (`PROJECT_UPDATED`).
+- Project deletion is one grouped logical action. `detach` clears `projectId` from tasks (including Trash rows) and deletes the project entity; `cascade` soft-deletes all active tasks assigned to the project plus every nested descendant, then deletes the project entity.
+- Cascade can cross project boundaries through hierarchy, so the UI warns when nested descendants currently belong to another project.
+- Project entity deletion uses a `__entity__ -> null` transaction change so cloud materialized state records the project as deleted while preserving immutable history.

@@ -1,3 +1,4 @@
+import { taskMapRestOpenApi } from "./rest-openapi";
 const DEFAULT_SUPABASE_URL = "https://axlykicsvtpeulshzyol.supabase.co";
 
 function upstreamUrl() {
@@ -8,7 +9,7 @@ function upstreamUrl() {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-taskmap-api-key, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
   "Cache-Control": "no-store",
 };
 
@@ -57,6 +58,22 @@ async function proxy(request: Request) {
   return new Response(body, { status: response.status, headers: outHeaders });
 }
 
-export async function GET(request: Request) { return proxy(request); }
+export async function GET(request: Request) {
+  const url = new URL(request.url);
+  if (url.searchParams.get("openapi") === "1") {
+    const headers = new Headers(corsHeaders); headers.set("content-type","application/json");
+    return new Response(JSON.stringify(taskMapRestOpenApi(url.origin)), { status:200, headers });
+  }
+  const response = await proxy(request);
+  if (!response.ok) return response;
+  try {
+    const data = await response.json();
+    data.version = "1.5";
+    data.openapi = `${url.origin}/api/taskmap/openapi.json`;
+    data.rest = { workspace:`${url.origin}/api/taskmap/workspace`, tasks:`${url.origin}/api/taskmap/tasks`, projects:`${url.origin}/api/taskmap/projects` };
+    const headers = new Headers(corsHeaders); headers.set("content-type","application/json");
+    return new Response(JSON.stringify(data), { status:200, headers });
+  } catch { return response; }
+}
 export async function POST(request: Request) { return proxy(request); }
 export async function OPTIONS() { return new Response(null, { status: 204, headers: corsHeaders }); }

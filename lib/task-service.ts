@@ -576,6 +576,92 @@ export async function createProject(name: string, color = "#5B5BD6") {
   return project;
 }
 
+export async function updateProject(id: string, patch: Pick<Partial<Project>, "name" | "color">) {
+  const before = await db.projects.get(id);
+  if (!before) throw new Error("Project not found");
+  const nextPatch: Partial<Project> = {};
+  if (patch.name !== undefined) {
+    const name = patch.name.trim();
+    if (!name) throw new Error("Project name is required");
+    const duplicate = (await db.projects.toArray()).find(project => project.id !== id && project.name.trim().toLowerCase() === name.toLowerCase());
+    if (duplicate) throw new Error(`Project already exists: ${name}`);
+    nextPatch.name = name;
+  }
+  if (patch.color !== undefined) {
+    if (!/^#[0-9a-f]{6}$/i.test(patch.color)) throw new Error("Project color must be a six-digit hex value");
+    nextPatch.color = patch.color;
+  }
+  const meaningful = Object.fromEntries(Object.entries(nextPatch).filter(([key,value]) => (before as unknown as Record<string,unknown>)[key] !== value)) as Partial<Project>;
+  if (!Object.keys(meaningful).length) return before;
+  const now = nowIso();
+  meaningful.updatedAt = now;
+  const txId = crypto.randomUUID();
+  await db.transaction("rw", db.projects, db.transactions, db.transactionChanges, async () => {
+    await db.projects.update(id, meaningful);
+    await db.transactions.add({ id:txId, entityType:"project", entityId:id, actionType:"PROJECT_UPDATED", deviceId:getDeviceId(), clientTimestamp:now, serverReceivedTimestamp:null, baseRevision:1, resultRevision:2, syncStatus:"pending" });
+    await db.transactionChanges.bulkAdd(Object.entries(meaningful).map(([fieldName,newValue]) => ({ id:crypto.randomUUID(), transactionId:txId, fieldName, oldValue:(before as unknown as Record<string,unknown>)[fieldName] ?? null, newValue })));
+  });
+  return db.projects.get(id);
+}
+
+export async function deleteProject(id: string, taskMode: "detach" | "cascade") {
+  const project = await db.projects.get(id);
+  if (!project) throw new Error("Project not found");
+  const allTasks = (await db.tasks.toArray()).filter(task => !task.purgedAt);
+  const assigned = allTasks.filter(task => task.projectId === id);
+  const affectedIds = new Set(assigned.map(task => task.id));
+  if (taskMode === "cascade") {
+    const queue = [...affectedIds];
+    while (queue.length) {
+      const parentId = queue.shift()!;
+      for (const child of allTasks.filter(task => task.parentTaskId === parentId)) {
+        if (affectedIds.has(child.id)) continue;
+        affectedIds.add(child.id);
+        queue.push(child.id);
+      }
+    }
+  }
+  const now = nowIso();
+  const groupId = crypto.randomUUID();
+  await db.transaction("rw", db.projects, db.tasks, db.transactions, db.transactionChanges, async () => {
+    if (taskMode === "detach") {
+      for (const before of assigned) {
+        const patch: Partial<Task> = { projectId:null, updatedAt:now, revision:before.revision + 1 };
+        await db.tasks.update(before.id, patch);
+        const txId = crypto.randomUUID();
+        await db.transactions.add({ id:txId, entityType:"task", entityId:before.id, actionType:"TASK_DETACHED_BY_PROJECT_DELETE", groupId, deviceId:getDeviceId(), clientTimestamp:now, serverReceivedTimestamp:null, baseRevision:before.revision, resultRevision:before.revision + 1, syncStatus:"pending" });
+        await db.transactionChanges.bulkAdd([
+          { id:crypto.randomUUID(), transactionId:txId, fieldName:"projectId", oldValue:before.projectId, newValue:null },
+          { id:crypto.randomUUID(), transactionId:txId, fieldName:"updatedAt", oldValue:before.updatedAt, newValue:now },
+          { id:crypto.randomUUID(), transactionId:txId, fieldName:"revision", oldValue:before.revision, newValue:before.revision + 1 },
+        ]);
+      }
+    } else {
+      for (const taskId of affectedIds) {
+        const before = allTasks.find(task => task.id === taskId);
+        if (!before || before.deletedAt) continue;
+        const patch: Partial<Task> = { deletedAt:now, updatedAt:now, revision:before.revision + 1 };
+        if (before.projectId === id) patch.projectId = null;
+        await db.tasks.update(before.id, patch);
+        const txId = crypto.randomUUID();
+        await db.transactions.add({ id:txId, entityType:"task", entityId:before.id, actionType:before.projectId === id ? "TASK_DELETED_WITH_PROJECT" : "TASK_DELETED_WITH_PROJECT_DESCENDANT", groupId, deviceId:getDeviceId(), clientTimestamp:now, serverReceivedTimestamp:null, baseRevision:before.revision, resultRevision:before.revision + 1, syncStatus:"pending" });
+        const changes = [
+          { id:crypto.randomUUID(), transactionId:txId, fieldName:"deletedAt", oldValue:before.deletedAt, newValue:now },
+          { id:crypto.randomUUID(), transactionId:txId, fieldName:"updatedAt", oldValue:before.updatedAt, newValue:now },
+          { id:crypto.randomUUID(), transactionId:txId, fieldName:"revision", oldValue:before.revision, newValue:before.revision + 1 },
+        ];
+        if (before.projectId === id) changes.push({ id:crypto.randomUUID(), transactionId:txId, fieldName:"projectId", oldValue:before.projectId, newValue:null });
+        await db.transactionChanges.bulkAdd(changes);
+      }
+    }
+    await db.projects.delete(id);
+    const txId = crypto.randomUUID();
+    await db.transactions.add({ id:txId, entityType:"project", entityId:id, actionType:taskMode === "cascade" ? "PROJECT_DELETED_WITH_TASKS" : "PROJECT_DELETED_KEEP_TASKS", groupId, deviceId:getDeviceId(), clientTimestamp:now, serverReceivedTimestamp:null, baseRevision:1, resultRevision:2, syncStatus:"pending" });
+    await db.transactionChanges.add({ id:crypto.randomUUID(), transactionId:txId, fieldName:"__entity__", oldValue:project, newValue:null });
+  });
+  return { projectId:id, taskMode, assignedTasks:assigned.length, affectedTasks:affectedIds.size };
+}
+
 export async function createTaskCategory(name: string, rule: string, color = "#5B5BD6") {
   const trimmedName = name.trim();
   const trimmedRule = rule.trim();
@@ -1135,18 +1221,31 @@ export async function seedQaChecklist() {
     { title: "Rotate a Sync Key without storing plaintext server-side", notes: "Rotate the active owner key. Confirm the old key stops connecting, the new key works, and Supabase stores only a key hash rather than the plaintext TM1 key.", priority: "normal" },
 
 
-    // v1.4: External API release. Only these new checks are Urgent.
-    { title: "Joining an existing Sync Key is pull-only on first sync", notes: "On a device that already has unrelated Local Only tasks, connect an existing TM1 Sync Key and open that workspace. Confirm the newly created workspace database starts from the cloud snapshot only, Local Only remains untouched, and none of the device's pre-existing local tasks are uploaded into the established cloud workspace.", priority: "urgent" },
-    { title: "External API stays unavailable for Local Only data", notes: "Open Settings while Local Only is active. Confirm External API explains that a cloud Sync Workspace is required and does not generate an API key automatically.", priority: "urgent" },
-    { title: "Create named read-only and read-write API keys", notes: "In a cloud workspace, create one read-only key and one key with Allow changes enabled. Confirm each key has a human-friendly name, the TMAPI1 secret is shown only when created, and the saved key list never reveals the secret again.", priority: "urgent" },
-    { title: "External API lists and searches workspace tasks", notes: "Use POST /api/taskmap with a read-only API key and action=list_tasks. Confirm filters such as query, status, priority, projectName, tag, limit, and offset return only the active cloud workspace data.", priority: "urgent" },
-    { title: "Read-only API key rejects write actions", notes: "Call create_task or update_task with a read-only API key. Confirm the API returns 403 and no TaskMap transaction or task change is created.", priority: "urgent" },
-    { title: "Read-write API creates and updates tasks through transaction history", notes: "Use create_task then update_task with a read-write API key. Confirm the task appears after workspace sync on another device and Task Details history contains API_TASK_CREATED / API_TASK_UPDATED transactions.", priority: "urgent" },
-    { title: "API completion and reopen preserve hierarchy semantics", notes: "Complete a parent through the API and confirm incomplete descendants are completed with the parent marker. Reopen the parent and confirm only descendants auto-completed by that action reopen. Also confirm a recurring task advances exactly once to its next occurrence.", priority: "urgent" },
-    { title: "API delete supports orphan and cascade modes plus restore", notes: "Delete a parent once with childMode=orphan and confirm children become top-level; restore it. Then delete with childMode=cascade and confirm descendants move to Trash. Use restore_task to restore a soft-deleted task.", priority: "urgent" },
-    { title: "Revoking one API key immediately blocks only that integration", notes: "Create two named API keys, use both, then revoke one. Confirm the revoked key returns 401 while the other API key and the workspace Sync Key continue working.", priority: "urgent" },
-    { title: "External API exposes a callable OpenAPI description", notes: "Open /api/taskmap?openapi=1 and confirm an OpenAPI 3.1 document describes the callTaskMap POST operation, Bearer TMAPI1 authentication, and supported actions for chatbot/agent integration.", priority: "urgent" },
-    { title: "Vercel API proxy forwards TaskMap API calls", notes: "From an outside client call the deployed TaskMap domain at /api/taskmap instead of the Supabase URL. Confirm GET metadata and authenticated POST actions proxy successfully with CORS enabled.", priority: "urgent" },  ];
+    // v1.4 External API checks are retained as Normal in v1.5.
+    { title: "Joining an existing Sync Key is pull-only on first sync", notes: "On a device that already has unrelated Local Only tasks, connect an existing TM1 Sync Key and open that workspace. Confirm the newly created workspace database starts from the cloud snapshot only, Local Only remains untouched, and none of the device's pre-existing local tasks are uploaded into the established cloud workspace.", priority: "normal" },
+    { title: "External API stays unavailable for Local Only data", notes: "Open Settings while Local Only is active. Confirm External API explains that a cloud Sync Workspace is required and does not generate an API key automatically.", priority: "normal" },
+    { title: "Create named read-only and read-write API keys", notes: "In a cloud workspace, create one read-only key and one key with Allow changes enabled. Confirm each key has a human-friendly name, the TMAPI1 secret is shown only when created, and the saved key list never reveals the secret again.", priority: "normal" },
+    { title: "External API lists and searches workspace tasks", notes: "Use POST /api/taskmap with a read-only API key and action=list_tasks. Confirm filters such as query, status, priority, projectName, tag, limit, and offset return only the active cloud workspace data.", priority: "normal" },
+    { title: "Read-only API key rejects write actions", notes: "Call create_task or update_task with a read-only API key. Confirm the API returns 403 and no TaskMap transaction or task change is created.", priority: "normal" },
+    { title: "Read-write API creates and updates tasks through transaction history", notes: "Use create_task then update_task with a read-write API key. Confirm the task appears after workspace sync on another device and Task Details history contains API_TASK_CREATED / API_TASK_UPDATED transactions.", priority: "normal" },
+    { title: "API completion and reopen preserve hierarchy semantics", notes: "Complete a parent through the API and confirm incomplete descendants are completed with the parent marker. Reopen the parent and confirm only descendants auto-completed by that action reopen. Also confirm a recurring task advances exactly once to its next occurrence.", priority: "normal" },
+    { title: "API delete supports orphan and cascade modes plus restore", notes: "Delete a parent once with childMode=orphan and confirm children become top-level; restore it. Then delete with childMode=cascade and confirm descendants move to Trash. Use restore_task to restore a soft-deleted task.", priority: "normal" },
+    { title: "Revoking one API key immediately blocks only that integration", notes: "Create two named API keys, use both, then revoke one. Confirm the revoked key returns 401 while the other API key and the workspace Sync Key continue working.", priority: "normal" },
+    { title: "External API exposes a callable OpenAPI description", notes: "Open /api/taskmap?openapi=1 and confirm an OpenAPI 3.1 document describes the callTaskMap POST operation, Bearer TMAPI1 authentication, and supported actions for chatbot/agent integration.", priority: "normal" },
+    { title: "Vercel API proxy forwards TaskMap API calls", notes: "From an outside client call the deployed TaskMap domain at /api/taskmap instead of the Supabase URL. Confirm GET metadata and authenticated POST actions proxy successfully with CORS enabled.", priority: "normal" },
+
+    // v1.5: REST GPT Actions + project management. Only these new checks are Urgent.
+    { title: "Project can be renamed from its project view", notes: "Open a project, click Rename project, enter a new name, and confirm the sidebar, breadcrumb, task chips, and synced devices reflect the new name without changing task assignments.", priority: "urgent" },
+    { title: "Project delete modal offers keep-tasks or cascade choices", notes: "Open a project and click Delete project. Confirm the modal matches the parent-delete pattern and clearly offers Delete project only (keep tasks) or Delete project + all tasks/descendants.", priority: "urgent" },
+    { title: "Deleting project only keeps tasks and hierarchy", notes: "Delete a temporary project using Delete project only. Confirm all tasks previously assigned to it remain active, become unassigned/Inbox eligible, and parent-child hierarchy remains intact.", priority: "urgent" },
+    { title: "Deleting project with tasks cascades through nested descendants", notes: "Create a project with nested tasks, including at least one descendant assigned to another project. Choose Delete project + all tasks/descendants and confirm every assigned task and nested descendant is soft-deleted into Trash; the modal warns about cross-project descendants first.", priority: "urgent" },
+    { title: "Project rename and delete sync across devices", notes: "Rename a cloud project on device A and sync device B. Then delete a temporary project with keep-tasks mode and confirm device B receives the project deletion and detached tasks through normal transaction sync.", priority: "urgent" },
+    { title: "REST API exposes separate GPT Actions", notes: "Open /api/taskmap/openapi.json and confirm distinct operationIds exist for getWorkspaceInfo, searchTasks, createTask, getTask, updateTask, deleteTask, completeTask, reopenTask, restoreTask, listProjects, createProject, updateProject, and deleteProject.", priority: "urgent" },
+    { title: "REST task endpoints remain compatible with legacy API", notes: "Create/search/update/complete/reopen/delete/restore tasks through the REST endpoints and confirm the same workspace entities and API_* transaction history appear as when using legacy POST /api/taskmap.", priority: "urgent" },
+    { title: "REST project endpoints create rename and delete projects", notes: "Use GET/POST /api/taskmap/projects and PATCH/DELETE /api/taskmap/projects/{projectId}. Verify PATCH renames/recolors and DELETE supports taskMode=detach and taskMode=cascade.", priority: "urgent" },
+    { title: "Legacy POST /api/taskmap remains backward compatible", notes: "Call the existing POST /api/taskmap with action=list_tasks and action=create_task and confirm integrations built for v1.4 continue working after the REST API is added.", priority: "urgent" },
+    { title: "GPT Actions OpenAPI imports without schema warnings", notes: "Import /api/taskmap/openapi.json into Custom GPT Actions. Confirm OpenAPI 3.1 is accepted and each REST operation appears as an individual callable action rather than one generic POST tool.", priority: "urgent" },
+  ];
 
   // Seed atomically. V5 preserves existing QA progress and only adds checklist entries that do not already exist.
   await db.transaction("rw", db.tasks, db.projects, db.transactions, db.transactionChanges, async () => {

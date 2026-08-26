@@ -1,6 +1,18 @@
-# TaskMap v1.4.0
+# TaskMap v1.5.0
 
 TaskMap is a local-first task manager with optional named cloud Sync Workspaces.
+
+
+## New in v1.5 — REST GPT Actions + project management
+
+- External API now exposes distinct REST operations so Custom GPT Actions sees separate tools instead of one generic POST command.
+- GPT/OpenAPI discovery: `/api/taskmap/openapi.json` (the legacy `/api/taskmap?openapi=1` alias returns the same REST schema).
+- REST routes include workspace info, task search/create/get/update/delete/complete/reopen/restore, and project list/create/update/delete.
+- The legacy `POST /api/taskmap` action endpoint remains available for existing integrations.
+- Project pages now include **Rename project** and **Delete project** actions on desktop and mobile.
+- Project deletion uses the same modal style as parent-task deletion: **Delete project only** keeps tasks and makes them unassigned, while **Delete project + all tasks/descendants** soft-deletes project tasks plus recursively nested descendants.
+- Cascade warnings explicitly call out descendants assigned to another project before deletion.
+- Project rename/delete actions are transaction-backed so they sync through the same local-first/cloud history model.
 
 ## New in v1.4 — External API + safer workspace joining
 
@@ -8,7 +20,7 @@ TaskMap is a local-first task manager with optional named cloud Sync Workspaces.
 - API keys can be read-only or read/write and are independent from Sync Keys.
 - API secrets use the `TMAPI1.<key-id>.<secret>` format and are shown only when created.
 - Callable endpoint: `/api/taskmap` on the deployed TaskMap domain.
-- OpenAPI discovery: `/api/taskmap?openapi=1`.
+- Legacy OpenAPI alias: `/api/taskmap?openapi=1`; v1.5 also exposes `/api/taskmap/openapi.json`.
 - Supported actions include workspace info, task list/search/get/create/update/complete/reopen/delete/restore, and project list/create/update.
 - All API writes go through the cloud transaction/field-merge layer so changes sync back to TaskMap and retain history.
 - Connecting an existing Sync Key now performs a pull-only first bootstrap into that workspace's isolated IndexedDB. It never uploads the device's Local Only tasks into an existing workspace.
@@ -80,6 +92,8 @@ Backend source is included under `supabase/`:
 - `migrations/20260826_taskmap_v1_2_sync.sql` — previous account-sync layer.
 - `migrations/20260826_taskmap_v1_3_sync_workspaces.sql` — Sync Workspace tables and merge RPC.
 - `functions/taskmap-workspace/` — Sync Key / recovery Edge Function.
+- `functions/taskmap-api/` — stable legacy action API broker.
+- `functions/taskmap-project-delete/` — authenticated project delete broker used by the v1.5 REST route.
 
 ## Core architecture
 

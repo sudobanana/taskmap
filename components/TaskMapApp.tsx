@@ -17,6 +17,7 @@ import {
   ListTodo,
   Map as MapIcon,
   Plus,
+  Pencil,
   Search,
   Settings as SettingsIcon,
   RotateCcw,
@@ -32,6 +33,7 @@ import {
   createTask,
   createTaskCategory,
   deleteTaskCategory,
+  deleteProject,
   deleteTaskSet,
   moveTaskInList,
   seedQaChecklist,
@@ -39,6 +41,7 @@ import {
   useTaskTemplate,
   toggleTaskComplete,
   updateTask,
+  updateProject,
   changeTaskProject,
   restoreTaskSet,
   permanentlyDeleteTaskSet,
@@ -161,6 +164,8 @@ export default function TaskMapApp() {
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [deleteRequest, setDeleteRequest] = useState<{ ids: string[]; source: "single" | "bulk" } | null>(null);
   const [projectChangeRequest, setProjectChangeRequest] = useState<{ taskId: string; projectId: string | null } | null>(null);
+  const [projectRenameRequest, setProjectRenameRequest] = useState<Project | null>(null);
+  const [projectDeleteRequest, setProjectDeleteRequest] = useState<Project | null>(null);
   const [recurringTransitions, setRecurringTransitions] = useState<Record<string, RecurringTransition>>({});
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileQuickAddOpen, setMobileQuickAddOpen] = useState(false);
@@ -705,7 +710,13 @@ export default function TaskMapApp() {
                 <h1>{pageTitle}</h1>
                 <p className="subtitle">{pageSubtitle}</p>
               </div>
-              {view !== "completed" && <button className="primary-button" onClick={() => document.getElementById("quick-task")?.focus()}><Plus size={17} /> Add task</button>}
+              <div className="page-heading-actions">
+                {selectedProject && view === "tasks" && !focusedParent && !selectedTagFilter && <>
+                  <button className="ghost-button project-manage-button" onClick={() => setProjectRenameRequest(selectedProject)}><Pencil size={14}/> Rename project</button>
+                  <button className="danger-button project-manage-button" onClick={() => setProjectDeleteRequest(selectedProject)}><Trash2 size={14}/> Delete project</button>
+                </>}
+                {view !== "completed" && <button className="primary-button" onClick={() => document.getElementById("quick-task")?.focus()}><Plus size={17} /> Add task</button>}
+              </div>
             </div>
 
             {focusedParent && view === "tasks" && (
@@ -828,6 +839,8 @@ export default function TaskMapApp() {
       )}
       {deleteRequest && <DeleteTasksDialog request={deleteRequest} tasks={tasks} onCancel={() => setDeleteRequest(null)} onDelete={async mode => { await deleteTaskSet(deleteRequest.ids, mode); const removed = new Set(deleteRequest.ids); if (selectedId && removed.has(selectedId)) setSelectedId(null); setBulkSelected(new Set()); setBulkMode(false); setDeleteRequest(null); }} />}
       {projectChangeRequest && <ProjectChangeDialog request={projectChangeRequest} tasks={tasks} projects={projects} onCancel={() => setProjectChangeRequest(null)} onChange={async includeDescendants => { await changeTaskProject(projectChangeRequest.taskId, projectChangeRequest.projectId, includeDescendants); setProjectChangeRequest(null); }} />}
+      {projectRenameRequest && <ProjectRenameDialog project={projectRenameRequest} onCancel={() => setProjectRenameRequest(null)} onRename={async name => { await updateProject(projectRenameRequest.id, { name }); setProjectRenameRequest(null); }} />}
+      {projectDeleteRequest && <ProjectDeleteDialog project={projectDeleteRequest} tasks={tasks} onCancel={() => setProjectDeleteRequest(null)} onDelete={async mode => { const result = await deleteProject(projectDeleteRequest.id, mode); if (selectedProjectId === projectDeleteRequest.id) { setSelectedProjectId(null); setFocusedParentId(null); setSelectedTagFilter(null); } if (selectedId) setSelectedId(null); setProjectDeleteRequest(null); return result; }} />}
       {assistantOpen && <AssistantPanel tasks={tasks} projects={projects} onClose={() => setAssistantOpen(false)} onExecuteAction={executeAssistantAction} />}
 
       {mobileMenuOpen && <div className="mobile-sheet-backdrop" onClick={() => setMobileMenuOpen(false)}><section className="mobile-more-sheet" onClick={event => event.stopPropagation()} aria-label="More TaskMap navigation">
@@ -1498,4 +1511,25 @@ function ProjectChangeDialog({ request, tasks, projects, onCancel, onChange }: {
   const [working,setWorking]=useState(false);
   async function go(includeDescendants:boolean){setWorking(true);await onChange(includeDescendants);setWorking(false);}
   return <div className="delete-modal-backdrop"><div className="delete-modal"><div className="delete-modal-icon project-change-modal-icon"><FileStack size={20}/></div><div><p className="eyebrow">Change parent project</p><h2>{task?.title ?? "Parent task"}</h2><p>Move this parent to <strong>{project?.name ?? "No project"}</strong>. Choose whether its {descendantCount} subtask{descendantCount===1?"":"s"} should follow it.</p></div><div className="delete-choice-list"><button disabled={working} onClick={()=>void go(true)}><strong>Change parent + all subtasks</strong><span>Moves every nested descendant to the same project.</span></button><button disabled={working} onClick={()=>void go(false)}><strong>Change parent only</strong><span>Leaves all subtasks in their current projects.</span></button></div><button className="ghost-button full" disabled={working} onClick={onCancel}>Cancel</button></div></div>;
+}
+
+
+function ProjectRenameDialog({ project, onCancel, onRename }: { project:Project; onCancel:()=>void; onRename:(name:string)=>Promise<void> }) {
+  const [name,setName]=useState(project.name);
+  const [working,setWorking]=useState(false);
+  const [error,setError]=useState<string|null>(null);
+  async function go(){const trimmed=name.trim();if(!trimmed)return;setWorking(true);setError(null);try{await onRename(trimmed);}catch(cause){setError(cause instanceof Error?cause.message:String(cause));setWorking(false);}}
+  return <div className="delete-modal-backdrop"><div className="delete-modal"><div className="delete-modal-icon project-change-modal-icon"><Pencil size={19}/></div><div><p className="eyebrow">Rename project</p><h2>{project.name}</h2><p>Change the project name without changing any of its tasks or hierarchy.</p></div><label className="project-rename-field"><span>Project name</span><input autoFocus value={name} onChange={event=>setName(event.target.value)} onKeyDown={event=>{if(event.key==="Enter")void go();if(event.key==="Escape")onCancel();}} /></label>{error&&<p className="dialog-error">{error}</p>}<button className="primary-button full" disabled={working||!name.trim()||name.trim()===project.name} onClick={()=>void go()}>{working?"Renaming…":"Rename Project"}</button><button className="ghost-button full" disabled={working} onClick={onCancel}>Cancel</button></div></div>;
+}
+
+function ProjectDeleteDialog({ project, tasks, onCancel, onDelete }: { project:Project; tasks:Task[]; onCancel:()=>void; onDelete:(mode:"detach"|"cascade")=>Promise<unknown> }) {
+  const assigned=tasks.filter(task=>task.projectId===project.id);
+  const affected=new Set(assigned.map(task=>task.id));
+  const queue=[...affected];
+  while(queue.length){const parentId=queue.shift()!;for(const child of tasks.filter(task=>task.parentTaskId===parentId)){if(affected.has(child.id))continue;affected.add(child.id);queue.push(child.id);}}
+  const descendantCount=Math.max(0,affected.size-assigned.length);
+  const outsideProjectDescendants=[...affected].map(id=>tasks.find(task=>task.id===id)).filter((task):task is Task=>Boolean(task&&task.projectId&&task.projectId!==project.id)).length;
+  const [working,setWorking]=useState(false);
+  async function go(mode:"detach"|"cascade"){setWorking(true);try{await onDelete(mode);}finally{setWorking(false);}}
+  return <div className="delete-modal-backdrop"><div className="delete-modal"><div className="delete-modal-icon"><Trash2 size={20}/></div><div><p className="eyebrow">Delete project</p><h2>{project.name}</h2><p>This project contains {assigned.length} task{assigned.length===1?"":"s"}{descendantCount?` with ${descendantCount} additional nested descendant${descendantCount===1?"":"s"}`:""}. Choose what should happen to them.</p></div><div className="delete-choice-list"><button disabled={working} className="danger-choice" onClick={()=>void go("cascade")}><strong>Delete project + all tasks/descendants</strong><span>Soft-deletes every task assigned to this project and every nested descendant.{outsideProjectDescendants?` ${outsideProjectDescendants} descendant${outsideProjectDescendants===1?" is":"s are"} currently assigned to another project and will also be deleted.`:""}</span></button><button disabled={working} onClick={()=>void go("detach")}><strong>Delete project only</strong><span>Keeps all tasks and hierarchy. Tasks assigned to {project.name} become unassigned.</span></button></div><button className="ghost-button full" disabled={working} onClick={onCancel}>Cancel</button></div></div>;
 }

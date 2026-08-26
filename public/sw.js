@@ -1,4 +1,4 @@
-const CACHE = "taskmap-runtime-v1-1";
+const CACHE = "taskmap-runtime-v1-5";
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(["/"])));
   self.skipWaiting();
