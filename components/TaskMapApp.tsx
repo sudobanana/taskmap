@@ -56,6 +56,7 @@ import { defaultRecurrenceRule, nextOccurrence, recurrenceLabel } from "@/lib/re
 import { APP_VERSION } from "@/lib/app-meta";
 import { parseQuickAddHierarchy } from "@/lib/quick-add";
 import SyncSettings from "./SyncSettings";
+import ExternalApiSettings from "./ExternalApiSettings";
 import { useCloudSync } from "./CloudSyncProvider";
 
 const nav = [
@@ -889,6 +890,7 @@ function SettingsView({ deletedTasks, allTasks, projects }: { deletedTasks: Task
     <div className="settings-grid">
       <section className="settings-card"><div><SettingsIcon size={18}/><h2>General</h2></div><p>TaskMap settings will live here as app-wide preferences are added.</p><div className="settings-row"><span>Offline-first storage</span><strong>Enabled</strong></div><div className="settings-row"><span>AI environment variable</span><code>OPENAI_API_KEY</code></div></section>
       <SyncSettings />
+      <ExternalApiSettings />
       <section className="settings-card about-card"><div><GitBranch size={18}/><h2>About</h2></div><p>TaskMap local-first task planning and mind-map workspace.</p><div className="about-version"><span>Version</span><strong>TaskMap v{APP_VERSION}</strong></div><small>Build version is sourced from one shared application constant.</small></section>
     </div>
     <section className="settings-card trash-card">

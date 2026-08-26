@@ -1,7 +1,7 @@
 import { db } from "./db";
 import { getDeviceId } from "./device";
 import { workspaceAction, type CloudWorkspaceInfo } from "./workspace-api";
-import { updateWorkspaceProfile, type LocalWorkspaceProfile } from "./workspace-storage";
+import { updateWorkspaceProfile, workspaceDatabaseName, type LocalWorkspaceProfile } from "./workspace-storage";
 import type { DevBacklogItem, Project, Task, TaskCategory, TaskLayout, TaskTemplate, Transaction, TransactionChange } from "./types";
 
 export type SyncRunResult = { pushed: number; pulled: number; syncedAt: string; workspace: CloudWorkspaceInfo };
@@ -98,19 +98,44 @@ async function applyRemote(response: SyncResponse) {
   });
 }
 
+
+async function clearActiveWorkspaceForRemoteBootstrap() {
+  await db.transaction("rw", [
+    db.tasks, db.projects, db.taskCategories, db.taskLayouts,
+    db.transactions, db.transactionChanges, db.devBacklog, db.taskTemplates,
+  ], async () => {
+    await Promise.all([
+      db.tasks.clear(), db.projects.clear(), db.taskCategories.clear(), db.taskLayouts.clear(),
+      db.transactions.clear(), db.transactionChanges.clear(), db.devBacklog.clear(), db.taskTemplates.clear(),
+    ]);
+  });
+}
+
 async function runSync(profile: LocalWorkspaceProfile): Promise<SyncRunResult> {
   if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("Device is offline");
-  const outgoing = await pendingTransactions();
+
+  // A connected workspace must always use its own isolated IndexedDB database.
+  // Refuse to sync rather than risk uploading Local Only or another workspace by mistake.
+  const expectedDatabase = workspaceDatabaseName(profile.id);
+  if (db.name !== expectedDatabase) throw new Error("Workspace database mismatch. Reload TaskMap before syncing this workspace.");
+
+  // Joining/recovering an existing Sync Key is deliberately pull-only on the first sync.
+  // Never send pre-existing device data to a workspace that was established elsewhere.
+  const firstRemoteBootstrap = !profile.hasSynced && profile.source !== "created";
+  const outgoing = firstRemoteBootstrap ? [] : await pendingTransactions();
   const bootstrapEntities = profile.bootstrapOnFirstSync && !profile.hasSynced ? await snapshots() : [];
   const response = await workspaceAction<SyncResponse>("sync", {
     deviceId:getDeviceId(),
     deviceName: typeof navigator === "undefined" ? "TaskMap device" : /Mobile|Android|iPhone/i.test(navigator.userAgent) ? "TaskMap mobile" : "TaskMap desktop",
-    cursor:profile.cursor,
+    cursor:firstRemoteBootstrap ? null : profile.cursor,
     bootstrapEntities,
     transactions:outgoing,
   }, { syncKey:profile.syncKey });
 
-  if (!profile.hasSynced && profile.source !== "created" && response.entityCount > 0) await removeFreshLocalQaIfRemoteHasQa(response.entities);
+  // Treat the cloud as authoritative for a first-time join/recovery. Clear only the
+  // isolated workspace database, then hydrate it from the full cloud snapshot/history.
+  if (firstRemoteBootstrap) await clearActiveWorkspaceForRemoteBootstrap();
+  else if (!profile.hasSynced && profile.source !== "created" && response.entityCount > 0) await removeFreshLocalQaIfRemoteHasQa(response.entities);
   await applyRemote(response);
   const txIds = outgoing.map(item => item.transaction.id);
   if (txIds.length) await db.transactions.where("id").anyOf(txIds).modify({ syncStatus:"synced", serverReceivedTimestamp:response.syncedAt });

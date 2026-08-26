@@ -1,12 +1,17 @@
-# TaskMap v1.3.3
+# TaskMap v1.4.0
 
-TaskMap is a local-first task planner built with Next.js, React, TypeScript, Dexie/IndexedDB, React Flow, Supabase, and an optional OpenAI-powered **Ask TaskMap** assistant.
+TaskMap is a local-first task manager with optional named cloud Sync Workspaces.
 
-## v1.3.3 build fix
+## New in v1.4 — External API + safer workspace joining
 
-- Excluded `supabase/functions/**` from the Next.js TypeScript build. Supabase Edge Functions run in the Deno-based Supabase Edge Runtime and use `npm:` / `jsr:` specifiers that Next.js should not type-check.
-- Normalized the checked-in Edge Function imports to the official lowercase `@supabase/*` package names.
-- No Sync Workspace behavior changed.
+- Settings → External API can create multiple named workspace-scoped API keys.
+- API keys can be read-only or read/write and are independent from Sync Keys.
+- API secrets use the `TMAPI1.<key-id>.<secret>` format and are shown only when created.
+- Callable endpoint: `/api/taskmap` on the deployed TaskMap domain.
+- OpenAPI discovery: `/api/taskmap?openapi=1`.
+- Supported actions include workspace info, task list/search/get/create/update/complete/reopen/delete/restore, and project list/create/update.
+- All API writes go through the cloud transaction/field-merge layer so changes sync back to TaskMap and retain history.
+- Connecting an existing Sync Key now performs a pull-only first bootstrap into that workspace's isolated IndexedDB. It never uploads the device's Local Only tasks into an existing workspace.
 
 ## New in v1.3 — Sync Workspaces
 
