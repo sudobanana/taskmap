@@ -1,15 +1,21 @@
-# TaskMap QA rebuild v8
+# TaskMap QA rebuild v12
 
 A local-first TaskMap prototype using Next.js, React, TypeScript, Dexie/IndexedDB, React Flow, and an optional OpenAI-powered **Ask TaskMap** assistant.
 
-## V8 data behavior
+## V12 data behavior
 
 - IndexedDB schema **v8 preserves existing QA progress**.
-- Existing QA checks are demoted to Normal; only the newest v8 asks/bug fixes seed as **Urgent**.
+- Existing QA checks are demoted to Normal; only the newest v12 regression check seeds as **Urgent**.
 - Task deletion remains soft/tombstoned and writes normal transaction history.
 - Recurring tasks continue to keep one active materialized occurrence while Calendar projects future occurrences virtually.
 
-## New in v8
+## New in v12
+
+- Task Details inputs are editable again: only field labels/drag handles initiate dragging.
+- Lower-row field dragging remains supported, including untitled action blocks via their dedicated handles.
+- QA specifically validates editing every Task Details field after rearranging the layout.
+
+## Previous feature set
 
 - Task-card Tags render as clickable filters beside Project and Parent chips.
 - Task Details renders Tags as clickable filters too.

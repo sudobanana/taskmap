@@ -896,7 +896,7 @@ export async function seedQaChecklist() {
     // V9: newest asks and bug fixes stay urgent for focused validation.
     { title: "Bulk delete has Select All for the visible filtered tasks", notes: "Enter Select mode in Tasks, Today, Inbox, or Completed. Click Select all and confirm every currently visible task is selected without selecting hidden tasks outside the current filter/search.", priority: "normal" },
     { title: "Settings appears below Offline status", notes: "Confirm a Settings button appears in the lower-left sidebar directly below the offline/sync status area.", priority: "normal" },
-    { title: "Settings About shows the current TaskMap version", notes: "Open Settings and confirm About displays TaskMap v0.11.0 from the shared app version source.", priority: "normal" },
+    { title: "Settings About shows the current TaskMap version", notes: "Open Settings and confirm About displays TaskMap v0.12.0 from the shared app version source.", priority: "normal" },
     { title: "Every Task Details row supports field dragging", notes: "Drag fields from the first, middle, and lower rows by their labels. Confirm all fields can move and all destination rows accept drops.", priority: "normal" },
     { title: "Untitled Task Details actions can be reordered", notes: "Drag Show this task + all subtasks and Save task + subtasks as a template using their small handle icons. Confirm neither action needs a visible field title.", priority: "normal" },
     { title: "Tasks pane owns its scrollbar while Task Details is open", notes: "Open Task Details on a wide screen and scroll the Tasks list. Confirm the scrollbar is directly on the right edge of the Tasks pane rather than at the far-right edge of the window.", priority: "normal" },
@@ -909,9 +909,12 @@ export async function seedQaChecklist() {
     { title: "Task Details lower rows can initiate and receive field drags", notes: "Open Task Details, grab a field label from the third or later row, move it to another lower or upper row, refresh TaskMap, and confirm the moved layout persists. Repeat with an untitled action handle.", priority: "normal" },
 
     // V11: current asks and bug fixes stay urgent for focused validation.
-    { title: "Project cascade prompt uses the hierarchy decision modal", notes: "Change the Project on a parent from Task Details and by dropping it onto a sidebar project. Confirm both paths use the same styled decision modal as parent deletion, with parent-only, parent-plus-subtasks, and Cancel choices.", priority: "urgent" },
-    { title: "Recurring completion lingers and protects the next checkbox", notes: "Complete a recurring task from the list. Confirm the completed occurrence stays visible for about one second with its next-occurrence message, then the next task shows a Next occurrence badge and its checkbox is briefly protected from rapid/double clicks.", priority: "urgent" },
-    { title: "Calendar warns when a scheduled task has no real duration", notes: "Drag an unscheduled task with no estimated duration onto Calendar. Confirm the block shows a warning icon and explains that the displayed length is a placeholder. Resize it to set a duration and confirm the warning disappears.", priority: "urgent" },
+    { title: "Project cascade prompt uses the hierarchy decision modal", notes: "Change the Project on a parent from Task Details and by dropping it onto a sidebar project. Confirm both paths use the same styled decision modal as parent deletion, with parent-only, parent-plus-subtasks, and Cancel choices.", priority: "normal" },
+    { title: "Recurring completion lingers and protects the next checkbox", notes: "Complete a recurring task from the list. Confirm the completed occurrence stays visible for about one second with its next-occurrence message, then the next task shows a Next occurrence badge and its checkbox is briefly protected from rapid/double clicks.", priority: "normal" },
+    { title: "Calendar warns when a scheduled task has no real duration", notes: "Drag an unscheduled task with no estimated duration onto Calendar. Confirm the block shows a warning icon and explains that the displayed length is a placeholder. Resize it to set a duration and confirm the warning disappears.", priority: "normal" },
+
+    // V12: Task Details editing regression fix is the newest urgent validation target.
+    { title: "Task Details fields remain editable after drag-layout changes", notes: "Open Task Details, rearrange a field from a lower row, then edit Status, Priority, Project, Parent, Duration, dates/times, Tags, Repeat, and Notes. Confirm only the field label/drag handle starts a drag and every editor remains clickable and editable.", priority: "urgent" },
   ];
 
   // Seed atomically. V5 preserves existing QA progress and only adds checklist entries that do not already exist.

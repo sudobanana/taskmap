@@ -1153,19 +1153,21 @@ function DraggableInspectorField({ fieldKey, label, singleRow, dragging, onDragS
   return <div
     className={`detail-field draggable-detail-field ${singleRow?"span-two":""} ${dragging?"dragging-field":""} ${untitled?"untitled-action-field":""}`}
     data-inspector-field={fieldKey}
-    draggable
-    onDragStart={event=>{
-      const target=event.target as HTMLElement | null;
-      if(!target?.closest('[data-inspector-drag-handle="true"]')){event.preventDefault();return;}
-      event.dataTransfer.effectAllowed="move";
-      event.dataTransfer.setData("text/plain",fieldKey);
-      onDragStart(fieldKey);
-    }}
-    onDragEnd={onDragEnd}
   >
     <span
       className={`detail-field-drag-label ${untitled?"untitled-action-handle":""}`}
       data-inspector-drag-handle="true"
+      draggable
+      onDragStart={event=>{
+        event.stopPropagation();
+        event.dataTransfer.effectAllowed="move";
+        event.dataTransfer.setData("text/plain",fieldKey);
+        onDragStart(fieldKey);
+      }}
+      onDragEnd={event=>{
+        event.stopPropagation();
+        onDragEnd();
+      }}
       aria-label={untitled?"Drag action to reposition":undefined}
       title={untitled?"Drag to reposition action":"Drag to reposition field"}
     ><b>⋮⋮</b>{label&&<span>{label}</span>}</span>
