@@ -163,19 +163,48 @@ export default function CalendarView({ tasks, onSelect }: { tasks: Task[]; onSel
     return { date: visibleDates[index], index };
   }
 
+  async function scheduleTaskAtPoint(taskId: string, clientX: number, clientY: number) {
+    const task = tasks.find(candidate => candidate.id === taskId);
+    const timeline = timelineRef.current;
+    if (!task || !timeline) return;
+    const box = timeline.getBoundingClientRect();
+    if (clientX < box.left || clientX > box.right || clientY < box.top || clientY > box.bottom) return;
+    const offsetMinutes = snap((clientY - box.top) / pxPerMinute);
+    const startMinutes = Math.max(startHour * 60, Math.min(endHour * 60 - minDuration, startHour * 60 + offsetMinutes));
+    const target = resolveDateAtPoint(clientX);
+    await updateTask(task.id, { startDate: target.date, startTime: minutesToTime(startMinutes) }, "CALENDAR_TASK_SCHEDULED_BY_DROP");
+  }
+
   async function scheduleDroppedTask(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setTimelineDropActive(false);
     setTimelineDropDate(null);
     const taskId = event.dataTransfer.getData("application/taskmap-calendar-task") || event.dataTransfer.getData("application/taskmap-task") || event.dataTransfer.getData("text/plain");
-    const task = tasks.find(candidate => candidate.id === taskId);
-    const timeline = timelineRef.current;
-    if (!task || !timeline) return;
-    const box = timeline.getBoundingClientRect();
-    const offsetMinutes = snap((event.clientY - box.top) / pxPerMinute);
-    const startMinutes = Math.max(startHour * 60, Math.min(endHour * 60 - minDuration, startHour * 60 + offsetMinutes));
-    const target = resolveDateAtPoint(event.clientX);
-    await updateTask(task.id, { startDate: target.date, startTime: minutesToTime(startMinutes) }, "CALENDAR_TASK_SCHEDULED_BY_DROP");
+    await scheduleTaskAtPoint(taskId, event.clientX, event.clientY);
+  }
+
+  function startUnscheduledPointerDrag(taskId: string, event: ReactPointerEvent<HTMLSpanElement>) {
+    if (event.pointerType === "mouse") return;
+    event.preventDefault();
+    event.stopPropagation();
+    let overTimeline = false;
+    const onMove = (pointer: PointerEvent) => {
+      const timeline = timelineRef.current;
+      if (!timeline) return;
+      const box = timeline.getBoundingClientRect();
+      overTimeline = pointer.clientX >= box.left && pointer.clientX <= box.right && pointer.clientY >= box.top && pointer.clientY <= box.bottom;
+      setTimelineDropActive(overTimeline);
+      setTimelineDropDate(overTimeline && calendarMode === "week" ? resolveDateAtPoint(pointer.clientX).date : null);
+    };
+    const onUp = async (pointer: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setTimelineDropActive(false);
+      setTimelineDropDate(null);
+      if (overTimeline) await scheduleTaskAtPoint(taskId, pointer.clientX, pointer.clientY);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
   }
 
   function overDayTasks(clientX: number, clientY: number) {
@@ -234,7 +263,7 @@ export default function CalendarView({ tasks, onSelect }: { tasks: Task[]; onSel
                   className={`all-day-chip ${task.priority} ${task.status === "done" ? "completed-calendar-item" : ""}`}
                   title="Drag onto the timeline to schedule"
                 >
-                  <GripVertical size={13} />
+                  <span className="calendar-chip-grip" onClick={event => event.stopPropagation()} onPointerDown={event => startUnscheduledPointerDrag(task.id, event)}><GripVertical size={13} /></span>
                   <span>{task.status === "done" ? "✓ " : task.priority === "urgent" ? "!!! " : ""}{task.title}{task.estimatedMinutes ? ` · ${formatDuration(task.estimatedMinutes)}` : ""}</span>
                   {calendarMode === "week" && <small className="week-task-date">{formatWeekDay(date).weekday} {formatWeekDay(date).day}</small>}
                 </button>

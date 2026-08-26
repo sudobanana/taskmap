@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
   CalendarDays,
@@ -154,6 +154,9 @@ export default function TaskMapApp() {
   const [deleteRequest, setDeleteRequest] = useState<{ ids: string[]; source: "single" | "bulk" } | null>(null);
   const [projectChangeRequest, setProjectChangeRequest] = useState<{ taskId: string; projectId: string | null } | null>(null);
   const [recurringTransitions, setRecurringTransitions] = useState<Record<string, RecurringTransition>>({});
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileQuickAddOpen, setMobileQuickAddOpen] = useState(false);
+  const taskPointerDragRef = useRef<{ id: string; targetId: string | null; mode: DropMode | null; projectId: string | null } | null>(null);
 
   const tasks = useLiveQuery(() => db.tasks.filter(task => !task.deletedAt).toArray(), [], []);
   const projects = useLiveQuery(() => db.projects.orderBy("name").toArray(), [], []);
@@ -248,6 +251,7 @@ export default function TaskMapApp() {
       }));
     }
     setQuickTitle("");
+    setMobileQuickAddOpen(false);
     setSelectedId(created[0]?.id ?? null);
   }
 
@@ -279,10 +283,10 @@ export default function TaskMapApp() {
     setShowCategoryForm(false);
   }
 
-  async function handleDrop(targetId: string, mode: DropMode) {
-    if (!draggingId || draggingId === targetId) return;
+  async function performTaskDrop(draggedId: string, targetId: string, mode: DropMode) {
+    if (draggedId === targetId) return;
     if (mode !== "nest" && sortMode !== "manual") return;
-    const dragged = tasks.find(task => task.id === draggingId);
+    const dragged = tasks.find(task => task.id === draggedId);
     const target = tasks.find(task => task.id === targetId);
     if (!dragged || !target) return;
 
@@ -290,13 +294,71 @@ export default function TaskMapApp() {
       if (descendantIds(tasks, dragged.id).has(target.id)) return;
       await updateTask(dragged.id, { parentTaskId: target.id, projectId: target.projectId ?? dragged.projectId }, "TASK_NESTED");
     } else {
-      const withoutDragged = visibleTasks.filter(task => task.id !== draggingId);
+      const withoutDragged = visibleTasks.filter(task => task.id !== draggedId);
       const targetIndex = withoutDragged.findIndex(task => task.id === targetId);
       const destinationIndex = Math.max(0, targetIndex + (mode === "after" ? 1 : 0));
       await moveTaskInList(dragged.id, visibleTasks, destinationIndex, target.parentTaskId);
     }
+  }
+
+  async function handleDrop(targetId: string, mode: DropMode) {
+    if (!draggingId) return;
+    await performTaskDrop(draggingId, targetId, mode);
     setDraggingId(null);
     setDropIndicator(null);
+  }
+
+  function beginTaskPointerDrag(taskId: string) {
+    taskPointerDragRef.current = { id: taskId, targetId: null, mode: null, projectId: null };
+    setDraggingId(taskId);
+    setDropIndicator(null);
+    setProjectDropId(null);
+  }
+
+  function updateTaskPointerDrag(taskId: string, clientX: number, clientY: number) {
+    const active = taskPointerDragRef.current;
+    if (!active || active.id !== taskId) return;
+    const elements = document.elementsFromPoint(clientX, clientY) as HTMLElement[];
+    const projectEl = elements.map(element => element.closest<HTMLElement>("[data-project-drop-id]")).find(Boolean) ?? null;
+    if (projectEl?.dataset.projectDropId) {
+      const projectId = projectEl.dataset.projectDropId;
+      active.projectId = projectId;
+      active.targetId = null;
+      active.mode = null;
+      setProjectDropId(projectId);
+      setDropIndicator(null);
+      return;
+    }
+
+    const rowEl = elements.map(element => element.closest<HTMLElement>("[data-task-row-id]")).find(Boolean) ?? null;
+    setProjectDropId(null);
+    active.projectId = null;
+    if (!rowEl?.dataset.taskRowId || rowEl.dataset.taskRowId === taskId) {
+      active.targetId = null;
+      active.mode = null;
+      setDropIndicator(null);
+      return;
+    }
+    const box = rowEl.getBoundingClientRect();
+    const ratio = (clientY - box.top) / Math.max(1, box.height);
+    const mode: DropMode = sortMode === "manual" ? (ratio < 0.25 ? "before" : ratio > 0.75 ? "after" : "nest") : "nest";
+    active.targetId = rowEl.dataset.taskRowId;
+    active.mode = mode;
+    setDropIndicator({ targetId: active.targetId, mode });
+  }
+
+  async function endTaskPointerDrag(taskId: string) {
+    const active = taskPointerDragRef.current;
+    taskPointerDragRef.current = null;
+    setDraggingId(null);
+    setDropIndicator(null);
+    setProjectDropId(null);
+    if (!active || active.id !== taskId) return;
+    if (active.projectId) {
+      await requestProjectChange(taskId, active.projectId);
+      return;
+    }
+    if (active.targetId && active.mode) await performTaskDrop(taskId, active.targetId, active.mode);
   }
 
   async function moveBy(taskId: string, delta: number) {
@@ -338,6 +400,8 @@ export default function TaskMapApp() {
   }
 
   function handleNav(id: View) {
+    setMobileMenuOpen(false);
+    setMobileQuickAddOpen(false);
     setView(id);
     setSelectedId(null);
     setBulkMode(false);
@@ -578,7 +642,7 @@ export default function TaskMapApp() {
           <span className="project-dot" style={{ background: "#9CA3AF" }} />All projects
         </button>
         {projects.map(project => (
-          <button key={project.id} className={`${selectedProjectId === project.id ? "project-item selected-project" : "project-item"} ${projectDropId === project.id ? "project-drop-target" : ""}`} onClick={() => openProject(project.id)} onDragOver={event => { event.preventDefault(); setProjectDropId(project.id); }} onDragLeave={() => setProjectDropId(current => current === project.id ? null : current)} onDrop={event => void dropTaskOnProject(project.id, event)}>
+          <button key={project.id} data-project-drop-id={project.id} className={`${selectedProjectId === project.id ? "project-item selected-project" : "project-item"} ${projectDropId === project.id ? "project-drop-target" : ""}`} onClick={() => openProject(project.id)} onDragOver={event => { event.preventDefault(); setProjectDropId(project.id); }} onDragLeave={() => setProjectDropId(current => current === project.id ? null : current)} onDrop={event => void dropTaskOnProject(project.id, event)}>
             <span className="project-dot" style={{ background: project.color }} />
             <span className="project-name">{project.name}</span>
             <span className="project-count">{tasks.filter(task => task.projectId === project.id && task.status !== "done").length}</span>
@@ -694,6 +758,9 @@ export default function TaskMapApp() {
                     dropMode={dropIndicator?.targetId === task.id ? dropIndicator.mode : null}
                     onDrop={(targetId, mode) => handleDrop(targetId, mode)}
                     onDragEnd={() => { setDraggingId(null); setDropIndicator(null); setProjectDropId(null); }}
+                    onPointerDragStart={() => beginTaskPointerDrag(task.id)}
+                    onPointerDragMove={(x, y) => updateTaskPointerDrag(task.id, x, y)}
+                    onPointerDragEnd={() => void endTaskPointerDrag(task.id)}
                     onProjectClick={projectId => openProject(projectId)}
                     onParentClick={parentId => focusParent(parentId)}
                     onTagClick={tag => focusTag(tag)}
@@ -746,6 +813,34 @@ export default function TaskMapApp() {
       {deleteRequest && <DeleteTasksDialog request={deleteRequest} tasks={tasks} onCancel={() => setDeleteRequest(null)} onDelete={async mode => { await deleteTaskSet(deleteRequest.ids, mode); const removed = new Set(deleteRequest.ids); if (selectedId && removed.has(selectedId)) setSelectedId(null); setBulkSelected(new Set()); setBulkMode(false); setDeleteRequest(null); }} />}
       {projectChangeRequest && <ProjectChangeDialog request={projectChangeRequest} tasks={tasks} projects={projects} onCancel={() => setProjectChangeRequest(null)} onChange={async includeDescendants => { await changeTaskProject(projectChangeRequest.taskId, projectChangeRequest.projectId, includeDescendants); setProjectChangeRequest(null); }} />}
       {assistantOpen && <AssistantPanel tasks={tasks} projects={projects} onClose={() => setAssistantOpen(false)} onExecuteAction={executeAssistantAction} />}
+
+      {mobileMenuOpen && <div className="mobile-sheet-backdrop" onClick={() => setMobileMenuOpen(false)}><section className="mobile-more-sheet" onClick={event => event.stopPropagation()} aria-label="More TaskMap navigation">
+        <div className="mobile-sheet-handle" />
+        <div className="mobile-sheet-heading"><div><strong>TaskMap</strong><span>More</span></div><button onClick={() => setMobileMenuOpen(false)} aria-label="Close more menu"><X size={20}/></button></div>
+        <div className="mobile-more-grid">
+          {nav.filter(([id]) => !(["today","tasks","calendar"] as string[]).includes(id)).map(([id,label,Icon]) => <button key={id} className={view===id?"active":""} onClick={() => handleNav(id)}><Icon size={19}/><span>{label}</span></button>)}
+          <button className={view==="settings"?"active":""} onClick={() => handleNav("settings")}><SettingsIcon size={19}/><span>Settings</span></button>
+          <button onClick={() => { setMobileMenuOpen(false); setAssistantOpen(true); }}><Sparkles size={19}/><span>Ask TaskMap</span></button>
+        </div>
+        <div className="mobile-sheet-section"><span>Projects</span><div className="mobile-project-list"><button className={!selectedProjectId?"active":""} onClick={() => { setMobileMenuOpen(false); openProject(null); }}><span className="project-dot" style={{background:"#9CA3AF"}}/>All projects</button>{projects.map(project=><button key={project.id} className={selectedProjectId===project.id?"active":""} onClick={() => { setMobileMenuOpen(false); openProject(project.id); }}><span className="project-dot" style={{background:project.color}}/><span>{project.name}</span><small>{tasks.filter(task=>task.projectId===project.id&&task.status!=="done").length}</small></button>)}</div></div>
+        <div className={online?"mobile-sync-status":"mobile-sync-status offline"}>{online?<Wifi size={15}/>:<CloudOff size={15}/>}<span>{online?`${pending} local change${pending===1?"":"s"}`:`Offline · ${pending} pending`}</span></div>
+      </section></div>}
+
+      {mobileQuickAddOpen && <div className="mobile-sheet-backdrop" onClick={() => setMobileQuickAddOpen(false)}><section className="mobile-quick-add-sheet" onClick={event => event.stopPropagation()} aria-label="Quick add task">
+        <div className="mobile-sheet-handle" />
+        <div className="mobile-sheet-heading"><div><strong>Quick Add</strong><span>{focusedParent ? `Subtasks under ${focusedParent.title}` : selectedProject ? selectedProject.name : "New task"}</span></div><button onClick={() => setMobileQuickAddOpen(false)} aria-label="Close quick add"><X size={20}/></button></div>
+        <label className="mobile-quick-add-input"><Plus size={20}/><input autoFocus value={quickTitle} onChange={event => setQuickTitle(event.target.value)} onKeyDown={event => { if(event.key==="Enter") void addQuickTask(); }} placeholder="Task one, Task two, Task three" /></label>
+        <p>Separate multiple tasks with commas.</p>
+        <button className="primary-button mobile-create-task" disabled={!quickTitle.trim()} onClick={() => void addQuickTask()}>Create task{quickTitle.includes(",")?"s":""}</button>
+      </section></div>}
+
+      {!selected && <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
+        <button className={view==="today"?"active":""} onClick={() => handleNav("today")}><Sun size={20}/><span>Today</span></button>
+        <button className={view==="tasks"?"active":""} onClick={() => handleNav("tasks")}><ListTodo size={20}/><span>Tasks</span></button>
+        <button className="mobile-add-button" onClick={() => setMobileQuickAddOpen(true)} aria-label="Quick add task"><Plus size={25}/></button>
+        <button className={view==="calendar"?"active":""} onClick={() => handleNav("calendar")}><CalendarDays size={20}/><span>Calendar</span></button>
+        <button className={mobileMenuOpen?"active":""} onClick={() => setMobileMenuOpen(true)}><span className="mobile-more-dots" aria-hidden="true">•••</span><span>More</span></button>
+      </nav>}
     </div>
   );
 }
@@ -765,7 +860,7 @@ function StatFilterCard({ label, value, detail, active, danger = false, onClick 
   return <button className={`stat-card stat-filter ${active ? "active" : ""} ${danger ? "danger" : ""}`} aria-pressed={active} onClick={onClick}><span>{label}</span><strong>{value}</strong><small>{detail}</small></button>;
 }
 
-function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, bulkChecked, onBulkToggle, manual, isFirst, isLast, onMove, dragging, onDragStart, onDragHover, dropMode, onDrop, onDragEnd, onProjectClick, onParentClick, onTagClick, onToggle, recurringState, checkboxProtected, nextOccurrenceLabel }: {
+function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, bulkChecked, onBulkToggle, manual, isFirst, isLast, onMove, dragging, onDragStart, onDragHover, dropMode, onDrop, onDragEnd, onPointerDragStart, onPointerDragMove, onPointerDragEnd, onProjectClick, onParentClick, onTagClick, onToggle, recurringState, checkboxProtected, nextOccurrenceLabel }: {
   task: Task;
   depth: number;
   project: Project | null;
@@ -785,6 +880,9 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
   dropMode: DropMode | null;
   onDrop: (targetId: string, mode: DropMode) => void;
   onDragEnd: () => void;
+  onPointerDragStart: () => void;
+  onPointerDragMove: (clientX: number, clientY: number) => void;
+  onPointerDragEnd: () => void;
   onProjectClick: (projectId: string) => void;
   onParentClick: (parentId: string) => void;
   onTagClick: (tag: string) => void;
@@ -806,7 +904,8 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
   return (
     <div
       className={`${selected ? "task-row selected" : "task-row"} ${visuallyDone ? "completed-row" : ""} ${recurringState ? `recurring-transition-${recurringState}` : ""} ${dropMode ? `drop-${dropMode}` : ""} ${dragging ? "dragging-task-row" : ""}`}
-      style={{ paddingLeft: `${18 + depth * 26}px` }}
+      data-task-row-id={task.id}
+      style={{ paddingLeft: `${18 + depth * 26}px`, "--mobile-task-indent": `${10 + Math.min(depth, 5) * 14}px` } as CSSProperties}
       onClick={onSelect}
       onDragOver={event => { event.preventDefault(); onDragHover(task.id, manual ? modeFromEvent(event) : "nest"); }}
       onDrop={event => { event.preventDefault(); onDrop(task.id, manual ? modeFromEvent(event) : "nest"); }}
@@ -820,6 +919,10 @@ function TaskRow({ task, depth, project, parent, selected, onSelect, bulkMode, b
         role="button"
         tabIndex={0}
         onClick={event => event.stopPropagation()}
+        onPointerDown={event => { if (event.pointerType === "mouse") return; event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); onPointerDragStart(); }}
+        onPointerMove={event => { if (event.pointerType === "mouse" || !event.currentTarget.hasPointerCapture(event.pointerId)) return; event.preventDefault(); onPointerDragMove(event.clientX, event.clientY); }}
+        onPointerUp={event => { if (event.pointerType === "mouse" || !event.currentTarget.hasPointerCapture(event.pointerId)) return; event.preventDefault(); event.currentTarget.releasePointerCapture(event.pointerId); onPointerDragEnd(); }}
+        onPointerCancel={event => { if (event.pointerType === "mouse") return; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); onPointerDragEnd(); }}
         onDragStart={event => { event.stopPropagation(); event.dataTransfer.effectAllowed = "move"; onDragStart(event); }}
         onDragEnd={event => { event.stopPropagation(); onDragEnd(); }}
       >⋮⋮</span>
