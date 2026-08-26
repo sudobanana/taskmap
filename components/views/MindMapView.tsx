@@ -16,7 +16,7 @@ import {
   type NodeProps,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { ChevronDown, ChevronRight, GitBranch, LayoutTree, Plus, Repeat2, Search, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, GitBranch, Layout, Plus, Repeat2, Search, Trash2 } from "lucide-react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "@/lib/db";
 import { arrangeTaskNodes, createTask, moveTaskNode, setTaskNodeCollapsed, updateTask } from "@/lib/task-service";
@@ -345,7 +345,7 @@ export default function MindMapView({ tasks, projects, onSelect }: { tasks: Task
           {scope === "parent" && <label>Parent<select value={parentId} onChange={event => setParentId(event.target.value)}>{tasks.map(task => <option key={task.id} value={task.id}>{task.title}</option>)}</select></label>}
           <label>Layout<select value={orientation} onChange={event => setOrientation(event.target.value as MapOrientation)}><option value="horizontal">Left → right</option><option value="vertical">Top → bottom</option></select></label>
           <label>Completed<select value={completedMode} onChange={event => setCompletedMode(event.target.value as CompletedMode)}><option value="dim">Dim</option><option value="show">Show normally</option><option value="hide">Hide</option></select></label>
-          <button className="ghost-button compact map-auto-arrange" onClick={() => void autoArrange()}><LayoutTree size={15}/> Auto Arrange</button>
+          <button className="ghost-button compact map-auto-arrange" onClick={() => void autoArrange()}><Layout size={15}/> Auto Arrange</button>
           {selectedEdgeId && <button className="delete-edge-button" onClick={() => void deleteSelectedEdge()}><Trash2 size={15} /> Delete connection</button>}
         </div>
       </div>
