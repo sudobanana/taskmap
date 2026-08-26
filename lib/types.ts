@@ -156,4 +156,4 @@ export type AssistantAction =
   | { type: "set_view"; view: "today" | "inbox" | "map" | "calendar" | "tasks" | "completed" | "templates" };
 
 export type TaskSortMode = "manual" | "priority" | "due" | "start" | "created" | "alphabetical";
-export type TodayFilter = "scheduled" | "unscheduled" | "urgent" | null;
+export type TodayFilter = "scheduled" | "unscheduled" | "urgent" | "completed" | null;

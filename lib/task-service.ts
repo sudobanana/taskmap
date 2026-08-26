@@ -896,7 +896,7 @@ export async function seedQaChecklist() {
     // V9: newest asks and bug fixes stay urgent for focused validation.
     { title: "Bulk delete has Select All for the visible filtered tasks", notes: "Enter Select mode in Tasks, Today, Inbox, or Completed. Click Select all and confirm every currently visible task is selected without selecting hidden tasks outside the current filter/search.", priority: "normal" },
     { title: "Settings appears below Offline status", notes: "Confirm a Settings button appears in the lower-left sidebar directly below the offline/sync status area.", priority: "normal" },
-    { title: "Settings About shows the current TaskMap version", notes: "Open Settings and confirm About displays TaskMap v0.13.0 from the shared app version source.", priority: "normal" },
+    { title: "Settings About shows the current TaskMap version", notes: "Open Settings and confirm About displays TaskMap v0.14.0 from the shared app version source.", priority: "normal" },
     { title: "Every Task Details row supports field dragging", notes: "Drag fields from the first, middle, and lower rows by their labels. Confirm all fields can move and all destination rows accept drops.", priority: "normal" },
     { title: "Untitled Task Details actions can be reordered", notes: "Drag Show this task + all subtasks and Save task + subtasks as a template using their small handle icons. Confirm neither action needs a visible field title.", priority: "normal" },
     { title: "Tasks pane owns its scrollbar while Task Details is open", notes: "Open Task Details on a wide screen and scroll the Tasks list. Confirm the scrollbar is directly on the right edge of the Tasks pane rather than at the far-right edge of the window.", priority: "normal" },
@@ -917,7 +917,14 @@ export async function seedQaChecklist() {
     { title: "Task Details fields remain editable after drag-layout changes", notes: "Open Task Details, rearrange a field from a lower row, then edit Status, Priority, Project, Parent, Duration, dates/times, Tags, Repeat, and Notes. Confirm only the field label/drag handle starts a drag and every editor remains clickable and editable.", priority: "normal" },
 
     // V13: replace native HTML drag with pointer-driven field reordering.
-    { title: "Task Details pointer drag works from every row", notes: "Open Task Details and drag a field from the third or later row by its title/handle. Confirm the field immediately gets the dragging-field class, destination highlights follow the pointer across upper/lower rows, dropping moves the field, inputs remain editable, and the layout persists after refresh.", priority: "urgent" },
+    { title: "Task Details pointer drag works from every row", notes: "Open Task Details and drag a field from the third or later row by its title/handle. Confirm the field immediately gets the dragging-field class, destination highlights follow the pointer across upper/lower rows, dropping moves the field, inputs remain editable, and the layout persists after refresh.", priority: "normal" },
+
+
+    // V14: weekly Calendar and browser/PWA identity are the newest validation targets.
+    { title: "Calendar switches between Day and Week views", notes: "Open Calendar, switch to Week, and confirm previous/next navigation moves one week at a time. Click a day header and confirm it opens that date in Day view.", priority: "urgent" },
+    { title: "Calendar supports 5-day and 7-day weeks with a shared unscheduled strip", notes: "In Week view toggle between 5 days and 7 days. Confirm unscheduled tasks span the shared Week Tasks strip across the top, can be dragged into any visible day/time, scheduled blocks can move across day columns, and dragging a block back to Week Tasks unschedules it.", priority: "urgent" },
+    { title: "Browser tab uses the TaskMap sidebar logo", notes: "Open or refresh TaskMap in Chrome and confirm the tab favicon matches the indigo GitBranch logo shown in the upper-left TaskMap brand. Also confirm the PWA manifest references the same icon.", priority: "urgent" },
+    { title: "Today Completed filter and counters exclude completed work", notes: "Open Today and confirm a Completed filter appears next to Urgent. Scheduled, Unscheduled, and Urgent counts must exclude completed tasks. Completed must count and show only tasks whose completed timestamp is today, including tasks completed today that are no longer otherwise due/scheduled/urgent today.", priority: "urgent" },
   ];
 
   // Seed atomically. V5 preserves existing QA progress and only adds checklist entries that do not already exist.

@@ -195,13 +195,17 @@ export default function TaskMapApp() {
   const baseScope = tagScoped ?? (parentScopeIds ? tasks.filter(task => parentScopeIds.has(task.id)) : projectScoped);
 
   const todayTasks = projectScoped.filter(task => task.dueDate === today || task.startDate === today || task.priority === "urgent");
+  const openTodayTasks = todayTasks.filter(task => task.status !== "done");
+  const completedToday = projectScoped.filter(task => task.status === "done" && task.completedAt && localDateOnly(new Date(task.completedAt)) === today);
   const todayVisibleByCompleted = showCompleted ? todayTasks : todayTasks.filter(task => task.status !== "done" || lingeringRecurringTaskIds.has(task.id));
-  const filteredToday = todayVisibleByCompleted.filter(task => {
-    if (todayFilter === "scheduled") return Boolean(task.startTime);
-    if (todayFilter === "unscheduled") return !task.startTime;
-    if (todayFilter === "urgent") return task.priority === "urgent";
-    return true;
-  });
+  const filteredToday = todayFilter === "completed"
+    ? completedToday
+    : todayVisibleByCompleted.filter(task => {
+        if (todayFilter === "scheduled") return Boolean(task.startTime);
+        if (todayFilter === "unscheduled") return !task.startTime;
+        if (todayFilter === "urgent") return task.priority === "urgent";
+        return true;
+      });
 
   let baseVisibleTasks: Task[] = baseScope;
   if (view === "today") baseVisibleTasks = filteredToday;
@@ -222,10 +226,10 @@ export default function TaskMapApp() {
   const displayEntries = hierarchyEntries(baseVisibleTasks, sortMode);
   const visibleTasks = displayEntries.map(entry => entry.task);
 
-  const scheduledToday = todayTasks.filter(task => Boolean(task.startTime));
-  const unscheduledToday = todayTasks.filter(task => !task.startTime);
-  const urgentToday = todayTasks.filter(task => task.priority === "urgent");
-  const workload = todayTasks.reduce((sum, task) => sum + (task.estimatedMinutes ?? 0), 0);
+  const scheduledToday = openTodayTasks.filter(task => Boolean(task.startTime));
+  const unscheduledToday = openTodayTasks.filter(task => !task.startTime);
+  const urgentToday = openTodayTasks.filter(task => task.priority === "urgent");
+  const workload = openTodayTasks.reduce((sum, task) => sum + (task.estimatedMinutes ?? 0), 0);
   const selectedProject = projects.find(project => project.id === selectedProjectId) ?? null;
 
   async function addQuickTask() {
@@ -642,6 +646,7 @@ export default function TaskMapApp() {
                 <StatFilterCard label="Scheduled" value={scheduledToday.length} detail={`${formatDuration(scheduledToday.reduce((sum, task) => sum + (task.estimatedMinutes ?? 0), 0)) || "0m"} blocked`} active={todayFilter === "scheduled"} onClick={() => setTodayFilter(todayFilter === "scheduled" ? null : "scheduled")} />
                 <StatFilterCard label="Unscheduled" value={unscheduledToday.length} detail={`${formatDuration(unscheduledToday.reduce((sum, task) => sum + (task.estimatedMinutes ?? 0), 0)) || "0m"} to place`} active={todayFilter === "unscheduled"} onClick={() => setTodayFilter(todayFilter === "unscheduled" ? null : "unscheduled")} />
                 <StatFilterCard label="Urgent" value={urgentToday.length} detail="need attention" active={todayFilter === "urgent"} danger onClick={() => setTodayFilter(todayFilter === "urgent" ? null : "urgent")} />
+                <StatFilterCard label="Completed" value={completedToday.length} detail="completed today" active={todayFilter === "completed"} onClick={() => setTodayFilter(todayFilter === "completed" ? null : "completed")} />
               </div>
             )}
 

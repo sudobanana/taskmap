@@ -1,22 +1,25 @@
-# TaskMap QA rebuild v13
+# TaskMap QA rebuild v14
 
 A local-first TaskMap prototype using Next.js, React, TypeScript, Dexie/IndexedDB, React Flow, and an optional OpenAI-powered **Ask TaskMap** assistant.
 
-## V13 data behavior
+## V14 data behavior
 
 - IndexedDB schema **v9 preserves existing QA progress**.
-- Existing QA checks are demoted to Normal; only the newest v13 regression check seeds as **Urgent**.
+- Existing QA checks are demoted to Normal; only the newest v14 calendar/icon checks seed as **Urgent**.
 - Task deletion remains soft/tombstoned and writes normal transaction history.
 - Recurring tasks continue to keep one active materialized occurrence while Calendar projects future occurrences virtually.
 
-## New in v13
+## New in v14
 
-- Replaced Task Details field reordering's native HTML5 `draggable` lifecycle with pointer-driven dragging.
-- Any field row can enter the drag state immediately from its title/handle, including lower rows and untitled action blocks.
-- Destination detection follows the pointer across upper/lower rows and highlights own-row or left/right placement.
-- Dragging near the top or bottom edge auto-scrolls Task Details.
-- Editors remain independent from dragging because only the field title/handle captures the pointer.
-- QA specifically checks that a third-or-later-row field receives the `dragging-field` state, moves, persists, and remains editable afterward.
+- Calendar now has Day and Week views.
+- Week view can show either Monday–Friday (5 days) or Monday–Sunday (7 days).
+- Unscheduled tasks share one strip across the top of the visible week and can be dragged into any day/time.
+- Scheduled blocks can move vertically and across day columns, resize, or be dragged back to the Week Tasks strip to unschedule.
+- Completed and virtual recurring occurrences remain visible in Week view using the same rules as Day view.
+- The current-time line appears only inside today's week column.
+- Calendar view/week-length preferences persist locally.
+- The Chrome tab favicon and PWA icon now use the same indigo GitBranch mark as the TaskMap sidebar brand.
+- Today now includes a Completed filter; Scheduled, Unscheduled, and Urgent counters exclude completed tasks, while Completed counts only tasks completed today.
 
 ## Previous feature set
 

@@ -5,6 +5,10 @@ export const metadata: Metadata = {
   title: "TaskMap",
   description: "Local-first visual task planning",
   manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    shortcut: "/icon.svg",
+  },
 };
 
 export const viewport: Viewport = {
